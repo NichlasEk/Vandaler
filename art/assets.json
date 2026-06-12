@@ -5,7 +5,7 @@
       "frames": [
         "idle", "climb", "punch_forward", "punch_up", "punch_diag_up", "punch_diag_down",
         "climb", "punch_forward", "punch_up", "punch_diag_up", "punch_diag_down", "punch_diag_down",
-        "walk_a", "walk_b"
+        "walk_a", "walk_b", "walk_c", "walk_d"
       ]
     },
     {
@@ -13,7 +13,7 @@
       "frames": [
         "idle", "climb", "punch_forward", "punch_up", "punch_diag_up", "punch_diag_down",
         "climb", "punch_forward", "punch_up", "punch_diag_up", "punch_diag_down", "punch_diag_down",
-        "walk_a", "walk_b"
+        "walk_a", "walk_b", "walk_c", "walk_d"
       ]
     },
     {
@@ -21,15 +21,15 @@
       "frames": [
         "idle", "climb", "punch_forward", "punch_up", "punch_diag_up", "punch_diag_down",
         "climb", "punch_forward", "punch_up", "punch_diag_up", "punch_diag_down", "punch_diag_down",
-        "walk_a", "walk_b"
+        "walk_a", "walk_b", "walk_c", "walk_d"
       ]
     }
   ],
   "objects": [
-    {"name": "enemy", "source": "art/source/objects/enemy.png", "out": "res/images/enemy.png", "frame_width": 24, "frame_height": 16, "frames": 3},
-    {"name": "tank", "source": "art/source/objects/tank.png", "out": "res/images/tank.png", "frame_width": 24, "frame_height": 16, "frames": 3},
+    {"name": "enemy", "source": "art/source/objects/enemy.png", "out": "res/images/enemy.png", "frame_width": 24, "frame_height": 16, "frames": 4},
+    {"name": "tank", "source": "art/source/objects/tank.png", "out": "res/images/tank.png", "frame_width": 24, "frame_height": 16, "frames": 4},
     {"name": "helicopter", "source": "art/source/objects/helicopter.png", "out": "res/images/helicopter.png", "frame_width": 32, "frame_height": 16, "frames": 4},
-    {"name": "person", "source": "art/source/objects/person.png", "out": "res/images/person.png", "frame_width": 8, "frame_height": 16, "frames": 1},
+    {"name": "person", "source": "art/source/objects/person.png", "out": "res/images/person.png", "frame_width": 8, "frame_height": 16, "frames": 4},
     {"name": "shot", "source": "art/source/objects/shot.png", "out": "res/images/shot.png", "frame_width": 8, "frame_height": 8, "frames": 1},
     {"name": "explosion", "source": "art/source/objects/explosion.png", "out": "res/images/explosion.png", "frame_width": 16, "frame_height": 16, "frames": 2}
   ]

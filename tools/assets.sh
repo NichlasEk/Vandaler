@@ -10,11 +10,13 @@ case "${1:-build}" in
     build)
         python tools/build_title.py
         python tools/paint_object_sources.py
+        python tools/build_sprite_cycles.py
         python tools/build_sprites.py
         ;;
     preview)
         python tools/build_title.py
         python tools/paint_object_sources.py
+        python tools/build_sprite_cycles.py
         python tools/build_sprites.py --preview art/source/vandaler_converted_preview.png
         ;;
     *)
