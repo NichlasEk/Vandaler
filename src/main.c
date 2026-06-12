@@ -20,6 +20,8 @@
 #define PLAYER_W 48
 #define PLAYER_H 56
 #define PLAYER_GROUND_Y ((FLOOR_Y - 7) * 8)
+#define PLAYER_SPRITE_Y_OFFSET 9
+#define PLAYER_CLIMB_SPRITE_X_OFFSET 9
 #define PLAYER_SPRITE_FRAMES 14
 #define POSE_IDLE 0
 #define POSE_CLIMB_UP 1
@@ -53,6 +55,14 @@
 #define SHOT_HURT_Y 2
 #define SHOT_HURT_W 4
 #define SHOT_HURT_H 4
+#define PERSON_EAT_X -6
+#define PERSON_EAT_Y -4
+#define PERSON_EAT_W 24
+#define PERSON_EAT_H 28
+#define PLAYER_BITE_X 10
+#define PLAYER_BITE_Y 18
+#define PLAYER_BITE_W 46
+#define PLAYER_BITE_H 38
 
 #define TILE_SKY     (TILE_USER_INDEX + 0)
 #define TILE_DARK    (TILE_USER_INDEX + 1)
@@ -215,16 +225,16 @@ typedef struct
 } RoofContact;
 
 static const u32 tileSky[8]     = {0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111};
-static const u32 tileDark[8]    = {0x22222222,0x22222222,0x22222222,0x22222222,0x22222222,0x22222222,0x22222222,0x22222222};
-static const u32 tileRoad[8]    = {0x33333333,0x33333333,0x33333333,0x33333333,0x33333333,0x33333333,0x33333333,0x33333333};
-static const u32 tileLine[8]    = {0x33333333,0x33333333,0x33333333,0x33333333,0x99999999,0x99999999,0x33333333,0x33333333};
-static const u32 tileGreen[8]   = {0x00440000,0x04444000,0x44444400,0x04444000,0x00440000,0x00A00000,0x00A00000,0x00A00000};
-static const u32 tileWinOn[8]   = {0x00000000,0x06666000,0x06666000,0x00000000,0x07777000,0x07777000,0x00000000,0x00000000};
-static const u32 tileWinOff[8]  = {0x00000000,0x02222000,0x02222000,0x00000000,0x02222000,0x02222000,0x00000000,0x00000000};
-static const u32 tileCrack[8]   = {0x00080000,0x00088000,0x00880000,0x08800000,0x00880000,0x00088000,0x00080000,0x00000000};
-static const u32 tileRed[8]     = {0x88888888,0x88888888,0x88888888,0x88888888,0x88888888,0x88888888,0x88888888,0x88888888};
-static const u32 tileWhite[8]   = {0x99999999,0x99999999,0x99999999,0x99999999,0x99999999,0x99999999,0x99999999,0x99999999};
-static const u32 tileYellow[8]  = {0x77777777,0x77777777,0x77777777,0x77777777,0x77777777,0x77777777,0x77777777,0x77777777};
+static const u32 tileDark[8]    = {0xBBBBBBBB,0xB2B2B2B2,0xBBBBBBBB,0x2B2B2B2B,0xBBBBBBBB,0xB2B2B2B2,0xBBBBBBBB,0x2B2B2B2B};
+static const u32 tileRoad[8]    = {0x3B333333,0x333333B3,0x333B3333,0x33333333,0xB333333B,0x33333B33,0x33333333,0x33B33333};
+static const u32 tileLine[8]    = {0x33333333,0x33333333,0x33333333,0x99999999,0x99999999,0x33333333,0x33333333,0x33333333};
+static const u32 tileGreen[8]   = {0x00044000,0x004C4400,0x04444440,0x0C4444C0,0x00444400,0x000A0000,0x000A0000,0x000A0000};
+static const u32 tileWinOn[8]   = {0x00000000,0x02222200,0x02666200,0x026C6200,0x02666200,0x02222200,0x00000000,0x00000000};
+static const u32 tileWinOff[8]  = {0x00000000,0x02222200,0x02222200,0x02000200,0x02000200,0x02222200,0x00000000,0x00000000};
+static const u32 tileCrack[8]   = {0x00080000,0x00028000,0x00888000,0x08820000,0x00288000,0x00028800,0x00008000,0x00000000};
+static const u32 tileRed[8]     = {0x88888888,0x8D8D8D8D,0xDDDDDDDD,0x88888888,0x8D8D8D8D,0xDDDDDDDD,0x88888888,0x88888888};
+static const u32 tileWhite[8]   = {0x99999999,0x9F9F9F9F,0xFFFFFFFF,0x99999999,0x99999999,0xFFFFFFFF,0x9F9F9F9F,0x99999999};
+static const u32 tileYellow[8]  = {0xDDDDDDDD,0xD77777DD,0xD77777DD,0xD7777DDD,0xD77777DD,0xD77777DD,0xDD7777DD,0xDDDDDDDD};
 static const u32 tileARing[8]   = {0x000FF000,0x00F00F00,0x000FF000,0x00F00F00,0x0F0000F0,0x0FFFFFF0,0x0F0000F0,0x0F0000F0};
 static const u32 tileAUml[8]    = {0x00F00F00,0x00000000,0x00F00F00,0x0F0000F0,0x0FFFFFF0,0x0F0000F0,0x0F0000F0,0x00000000};
 static const u32 tileOUml[8]    = {0x00F00F00,0x00000000,0x00FFFF00,0x0F0000F0,0x0F0000F0,0x0F0000F0,0x00FFFF00,0x00000000};
@@ -232,19 +242,19 @@ static const u32 tileOUml[8]    = {0x00F00F00,0x00000000,0x00FFFF00,0x0F0000F0,0
 static const u16 palette0[16] =
 {
     RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(0,1,7),
+    RGB3_3_3_TO_VDPCOLOR(0,2,7),
     RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(3,3,3),
+    RGB3_3_3_TO_VDPCOLOR(4,4,4),
     RGB3_3_3_TO_VDPCOLOR(0,6,1),
     RGB3_3_3_TO_VDPCOLOR(0,4,1),
-    RGB3_3_3_TO_VDPCOLOR(4,5,7),
-    RGB3_3_3_TO_VDPCOLOR(7,6,0),
+    RGB3_3_3_TO_VDPCOLOR(4,6,7),
+    RGB3_3_3_TO_VDPCOLOR(7,5,0),
     RGB3_3_3_TO_VDPCOLOR(7,1,0),
     RGB3_3_3_TO_VDPCOLOR(7,7,7),
-    RGB3_3_3_TO_VDPCOLOR(3,2,0),
-    RGB3_3_3_TO_VDPCOLOR(1,1,2),
-    RGB3_3_3_TO_VDPCOLOR(0,0,4),
-    RGB3_3_3_TO_VDPCOLOR(7,7,0),
+    RGB3_3_3_TO_VDPCOLOR(4,2,0),
+    RGB3_3_3_TO_VDPCOLOR(1,1,3),
+    RGB3_3_3_TO_VDPCOLOR(0,0,5),
+    RGB3_3_3_TO_VDPCOLOR(7,6,2),
     RGB3_3_3_TO_VDPCOLOR(0,0,0),
     RGB3_3_3_TO_VDPCOLOR(7,7,7)
 };
@@ -459,6 +469,10 @@ static void drawSkyline(void)
         const u8 x = i * 5;
         const u8 h = heights[i];
         VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), x, FLOOR_Y - h, 5, h);
+        if (x + 4 < SCREEN_TILES_W)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WIN_OFF), x + 4, FLOOR_Y - h + 1, 1, h - 1);
+        }
         if ((i & 1) == 0)
         {
             VDP_setTileMapXY(BG_B, attr(PAL0, TILE_RED), x + 2, FLOOR_Y - h - 1);
@@ -484,6 +498,7 @@ static void drawRoad(void)
         VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_LINE), x, FLOOR_Y + 2, 3, 1);
     }
     VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WHITE), 0, FLOOR_Y, SCREEN_TILES_W, 1);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), 0, FLOOR_Y + 4, SCREEN_TILES_W, 1);
 }
 
 static void resetThreats(void)
@@ -557,6 +572,13 @@ static void drawBuilding(const Building *b)
     if (!b->alive) return;
 
     VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_YELLOW), b->x, b->y, b->w, b->h);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WHITE), b->x, b->y, b->w, 1);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), b->x, b->y, 1, b->h);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_RED), b->x + 1, b->y + b->h - 2, b->w - 2, 1);
+    if (b->w > 4)
+    {
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_YELLOW), b->x + b->w - 1, b->y + 1, 1, b->h - 2);
+    }
     for (u8 yy = 1; yy < b->h; yy += 2)
     {
         for (u8 xx = 1; xx + 1 < b->w; xx += 2)
@@ -564,6 +586,11 @@ static void drawBuilding(const Building *b)
             const bool broken = ((xx + yy + b->damage) & 3) == 0;
             VDP_setTileMapXY(BG_B, attr(PAL0, broken ? TILE_WIN_OFF : TILE_WIN_ON), b->x + xx, b->y + yy);
         }
+    }
+    if (b->h > 5 && b->w > 3)
+    {
+        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_DARK), b->x + 1, b->y + b->h - 1);
+        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WHITE), b->x + 2, b->y + b->h - 1);
     }
     for (u8 d = 0; d < b->damage && d < MAX_DAMAGE_MARKS; d++)
     {
@@ -719,16 +746,24 @@ static void updatePlayerSprite(void)
 {
     const u8 pal = monsters[player.monster].pal;
     u8 spriteFrame = player.monster * PLAYER_SPRITE_FRAMES;
+    s16 spriteX = player.x;
+    s16 spriteY = player.y + PLAYER_SPRITE_Y_OFFSET;
+    const ClimbContact climbContact = getClimbContact();
+    const bool visuallyClimbing = !player.grounded && climbContact.active;
 
     showPlayerSprite();
     SPR_setPalette(playerSprite, pal);
     if (player.punching) spriteFrame += player.attackPose;
-    else if (!player.grounded && getClimbContact().active) spriteFrame += player.climbPose;
+    else if (visuallyClimbing) spriteFrame += player.climbPose;
     else if (player.landTimer > 0) spriteFrame += (player.landTimer & 4) ? POSE_WALK_A : POSE_WALK_B;
     else if (player.walking) spriteFrame += (frame & 8) ? POSE_WALK_A : POSE_WALK_B;
+    if (visuallyClimbing)
+    {
+        spriteX += climbContact.attackDir > 0 ? PLAYER_CLIMB_SPRITE_X_OFFSET : -PLAYER_CLIMB_SPRITE_X_OFFSET;
+    }
     SPR_setFrame(playerSprite, spriteFrame);
     SPR_setHFlip(playerSprite, player.dir < 0);
-    SPR_setPosition(playerSprite, player.x, player.y);
+    SPR_setPosition(playerSprite, spriteX, spriteY);
 }
 
 static void updateThreatSprites(void)
@@ -1321,7 +1356,13 @@ static bool eatPerson(AttackBox attack)
         if (!p->active) continue;
         if (!p->edible) continue;
 
-        if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, p->x, p->y, 8, 16))
+        const s16 eatX = p->x + PERSON_EAT_X;
+        const s16 eatY = p->y + PERSON_EAT_Y;
+        const s16 biteX = player.x + (player.dir > 0 ? PLAYER_BITE_X : PLAYER_W - PLAYER_BITE_X - PLAYER_BITE_W);
+        const s16 biteY = player.y + PLAYER_BITE_Y;
+
+        if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, eatX, eatY, PERSON_EAT_W, PERSON_EAT_H) ||
+            rectsOverlap(biteX, biteY, PLAYER_BITE_W, PLAYER_BITE_H, eatX, eatY, PERSON_EAT_W, PERSON_EAT_H))
         {
             p->active = FALSE;
             if (playerHealth < PLAYER_MAX_HEALTH) playerHealth++;

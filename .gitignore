@@ -8,3 +8,5 @@ out/
 *.lst
 *.d
 *.sym
+__pycache__/
+*.pyc
