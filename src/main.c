@@ -12,14 +12,15 @@
 #define MAX_TANKS 2
 #define MAX_HELIS 2
 #define MAX_SHOTS 10
-#define MAX_PEOPLE 4
+#define MAX_PEOPLE 8
 #define MAX_EXPLOSIONS 4
 #define MAX_DAMAGE_MARKS 16
+#define MAX_WINDOW_PEOPLE 4
 #define PLAYER_MAX_HEALTH 8
 #define PLAYER_W 48
 #define PLAYER_H 56
 #define PLAYER_GROUND_Y ((FLOOR_Y - 7) * 8)
-#define PLAYER_SPRITE_FRAMES 12
+#define PLAYER_SPRITE_FRAMES 14
 #define POSE_IDLE 0
 #define POSE_CLIMB_UP 1
 #define POSE_PUNCH 2
@@ -32,6 +33,8 @@
 #define POSE_CLIMB_PUNCH_DIAG_UP 9
 #define POSE_CLIMB_PUNCH_DIAG_DOWN 10
 #define POSE_CLIMB_PUNCH_OUT 11
+#define POSE_WALK_A 12
+#define POSE_WALK_B 13
 #define PLAYER_HURT_X 14
 #define PLAYER_HURT_Y 10
 #define PLAYER_HURT_W 20
@@ -101,6 +104,7 @@ typedef struct
     u8 attackPose;
     u8 climbPose;
     AttackBox attack;
+    bool walking;
     bool grounded;
 } Player;
 
@@ -113,6 +117,10 @@ typedef struct
     u8 damage;
     u8 damageX[MAX_DAMAGE_MARKS];
     u8 damageY[MAX_DAMAGE_MARKS];
+    u8 personX[MAX_WINDOW_PEOPLE];
+    u8 personY[MAX_WINDOW_PEOPLE];
+    bool personAlive[MAX_WINDOW_PEOPLE];
+    bool personEdible[MAX_WINDOW_PEOPLE];
     u8 colorPal;
     bool alive;
 } Building;
@@ -166,7 +174,10 @@ typedef struct
 {
     s16 x;
     s16 y;
+    s16 vy;
     s16 speed;
+    bool falling;
+    bool edible;
     bool active;
     Sprite *sprite;
 } Person;
@@ -519,6 +530,15 @@ static void initBuildings(void)
             buildings[i].damageX[d] = 0;
             buildings[i].damageY[d] = 0;
         }
+        for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
+        {
+            const u8 col = 1 + ((p & 1) * 2);
+            const u8 row = 1 + ((p / 2) * 2);
+            buildings[i].personX[p] = buildings[i].x + (col < buildings[i].w ? col : 1);
+            buildings[i].personY[p] = buildings[i].y + (row < buildings[i].h ? row : 1);
+            buildings[i].personAlive[p] = (buildings[i].personY[p] < FLOOR_Y - 1);
+            buildings[i].personEdible[p] = ((i + p) & 1) == 0;
+        }
         buildings[i].colorPal = PAL0;
         buildings[i].alive = TRUE;
     }
@@ -542,6 +562,11 @@ static void drawBuilding(const Building *b)
         const u8 cx = b->damageX[d];
         const u8 cy = b->damageY[d];
         if (cy < FLOOR_Y) VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CRACK), cx, cy);
+    }
+    for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
+    {
+        if (!b->personAlive[p]) continue;
+        VDP_setTileMapXY(BG_B, attr(PAL0, b->personEdible[p] ? TILE_GREEN : TILE_WHITE), b->personX[p], b->personY[p]);
     }
 }
 
@@ -685,13 +710,14 @@ static void showPlayerSprite(void)
 static void updatePlayerSprite(void)
 {
     const u8 pal = monsters[player.monster].pal;
-    u8 frame = player.monster * PLAYER_SPRITE_FRAMES;
+    u8 spriteFrame = player.monster * PLAYER_SPRITE_FRAMES;
 
     showPlayerSprite();
     SPR_setPalette(playerSprite, pal);
-    if (player.punching) frame += player.attackPose;
-    else if (!player.grounded && getClimbContact().active) frame += player.climbPose;
-    SPR_setFrame(playerSprite, frame);
+    if (player.punching) spriteFrame += player.attackPose;
+    else if (!player.grounded && getClimbContact().active) spriteFrame += player.climbPose;
+    else if (player.walking) spriteFrame += (frame & 8) ? POSE_WALK_A : POSE_WALK_B;
+    SPR_setFrame(playerSprite, spriteFrame);
     SPR_setHFlip(playerSprite, player.dir < 0);
     SPR_setPosition(playerSprite, player.x, player.y);
 }
@@ -738,7 +764,7 @@ static void updateThreatSprites(void)
         SPR_setVisibility(h->sprite, h->active ? VISIBLE : HIDDEN);
         if (h->active)
         {
-            SPR_setHFlip(h->sprite, h->speed < 0);
+            SPR_setHFlip(h->sprite, h->speed > 0);
             SPR_setPosition(h->sprite, h->x, h->y);
         }
     }
@@ -849,6 +875,7 @@ static void startCity(void)
     player.punchTimer = 0;
     player.attackPose = POSE_PUNCH;
     player.climbPose = POSE_CLIMB_UP;
+    player.walking = FALSE;
     player.grounded = TRUE;
     playerHealth = PLAYER_MAX_HEALTH;
     invulnerableTimer = 0;
@@ -933,18 +960,36 @@ static void spawnShot(s16 x, s16 y, s16 dx, s16 dy)
     }
 }
 
-static void spawnPersonNearBuilding(const Building *b)
+static void spawnPerson(s16 x, s16 y, bool falling, bool edible)
 {
     for (u8 i = 0; i < MAX_PEOPLE; i++)
     {
         if (!people[i].active)
         {
-            people[i].x = (b->x * 8) + 8;
-            people[i].y = (FLOOR_Y * 8) - 16;
+            people[i].x = x;
+            people[i].y = y;
+            people[i].vy = falling ? 1 : 0;
             people[i].speed = ((frame + i) & 1) ? 1 : -1;
+            people[i].falling = falling;
+            people[i].edible = edible;
             people[i].active = TRUE;
             return;
         }
+    }
+}
+
+static void releaseWindowPeopleNear(Building *b, u8 hitX, u8 hitY)
+{
+    for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
+    {
+        if (!b->personAlive[p]) continue;
+
+        const s16 dx = (s16)b->personX[p] - (s16)hitX;
+        const s16 dy = (s16)b->personY[p] - (s16)hitY;
+        if (dx < -1 || dx > 1 || dy < -1 || dy > 1) continue;
+
+        b->personAlive[p] = FALSE;
+        spawnPerson((s16)b->personX[p] * 8, (s16)b->personY[p] * 8, TRUE, b->personEdible[p]);
     }
 }
 
@@ -1137,9 +1182,10 @@ static void updateThreats(void)
             if (h->burstDelay == 0)
             {
                 const s16 dx = (player.x < h->x) ? -1 : 1;
-                spawnShot(h->x + 14, h->y + 12, dx, 1);
+                const s16 muzzleX = h->x + (dx < 0 ? 4 : 24);
+                spawnShot(muzzleX, h->y + 12, dx, 1);
                 h->burst--;
-                h->burstDelay = 14;
+                h->burstDelay = 5;
                 if (h->burst == 0) h->cooldown = 150;
             }
         }
@@ -1198,6 +1244,19 @@ static void updateThreats(void)
         Person *p = &people[i];
         if (!p->active) continue;
 
+        if (p->falling)
+        {
+            p->y += p->vy;
+            if (p->vy < 4) p->vy++;
+            if (p->y >= (FLOOR_Y * 8) - 16)
+            {
+                p->y = (FLOOR_Y * 8) - 16;
+                p->vy = 0;
+                p->falling = FALSE;
+            }
+            continue;
+        }
+
         if ((frame & 3) == 0) p->x += p->speed;
         if (p->x < 0)
         {
@@ -1228,6 +1287,7 @@ static bool eatPerson(AttackBox attack)
     {
         Person *p = &people[i];
         if (!p->active) continue;
+        if (!p->edible) continue;
 
         if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, p->x, p->y, 8, 16))
         {
@@ -1306,6 +1366,51 @@ static bool attackEnemies(AttackBox attack)
     return FALSE;
 }
 
+static void applyBuildingDamage(Building *b, u8 hitX, u8 hitY)
+{
+    const u8 mark = b->damage < MAX_DAMAGE_MARKS ? b->damage : MAX_DAMAGE_MARKS - 1;
+
+    if (b->damage < b->h - 2)
+    {
+        b->damageX[mark] = hitX;
+        b->damageY[mark] = hitY;
+        releaseWindowPeopleNear(b, hitX, hitY);
+        b->damage++;
+        score += 10;
+        playTone(80 + (b->damage * 4), 9);
+    }
+    else
+    {
+        b->alive = FALSE;
+        score += 100;
+        playTone(32, 14);
+    }
+    drawBuildings();
+    drawHud();
+}
+
+static bool damageBuildingAtAttack(AttackBox attack)
+{
+    for (u8 i = 0; i < MAX_BUILDINGS; i++)
+    {
+        Building *b = &buildings[i];
+        const s16 bx = b->x * 8;
+        const s16 by = b->y * 8;
+        const s16 bw = b->w * 8;
+        const s16 bh = b->h * 8;
+        if (!b->alive) continue;
+        if (!rectsOverlap(attack.x, attack.y, attack.w, attack.h, bx, by, bw, bh)) continue;
+
+        const s16 rawY = (attack.y + (attack.h / 2)) / 8;
+        const u8 hitY = rawY < b->y ? b->y : (rawY >= FLOOR_Y ? FLOOR_Y - 1 : rawY);
+        const u8 hitX = attack.xDir > 0 ? b->x : (b->x + b->w - 1);
+        applyBuildingDamage(b, hitX, hitY);
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
 static void damageBuildings(ClimbContact contact, AttackBox attack)
 {
     if (!contact.active) return;
@@ -1315,28 +1420,10 @@ static void damageBuildings(ClimbContact contact, AttackBox attack)
     if (!b->alive) return;
     if ((player.y / 8) + 4 >= b->y)
     {
-        const u8 mark = b->damage < MAX_DAMAGE_MARKS ? b->damage : MAX_DAMAGE_MARKS - 1;
         const s16 rawY = (attack.y + (attack.h / 2)) / 8;
         const u8 hitY = rawY < b->y ? b->y : (rawY >= FLOOR_Y ? FLOOR_Y - 1 : rawY);
         const u8 hitX = contact.attackDir > 0 ? b->x : (b->x + b->w - 1);
-
-        if (b->damage < b->h - 2)
-        {
-            b->damageX[mark] = hitX;
-            b->damageY[mark] = hitY;
-            b->damage++;
-            score += 10;
-            playTone(80 + (b->damage * 4), 9);
-            if ((b->damage & 1) != 0) spawnPersonNearBuilding(b);
-        }
-        else
-        {
-            b->alive = FALSE;
-            score += 100;
-            playTone(32, 14);
-        }
-        drawBuildings();
-        drawHud();
+        applyBuildingDamage(b, hitX, hitY);
     }
 }
 
@@ -1430,16 +1517,19 @@ static void updatePlayer(u16 joy, u16 pressed)
     bool onFacade;
     bool climbing;
     bool onRoof;
+    bool moved = FALSE;
 
     if (joy & BUTTON_LEFT)
     {
         player.x -= 2;
         player.dir = -1;
+        moved = TRUE;
     }
     if (joy & BUTTON_RIGHT)
     {
         player.x += 2;
         player.dir = 1;
+        moved = TRUE;
     }
 
     climbContact = getClimbContact();
@@ -1454,6 +1544,7 @@ static void updatePlayer(u16 joy, u16 pressed)
         player.vy = 0;
         player.grounded = TRUE;
     }
+    player.walking = moved && player.grounded;
 
     if (onFacade || climbing)
     {
@@ -1461,6 +1552,7 @@ static void updatePlayer(u16 joy, u16 pressed)
         player.dir = climbContact.attackDir;
         player.vy = 0;
         player.grounded = FALSE;
+        player.walking = FALSE;
     }
     if (climbing && player.y > 40)
     {
@@ -1513,9 +1605,10 @@ static void updatePlayer(u16 joy, u16 pressed)
             else player.attackPose = POSE_CLIMB_PUNCH_IN;
         }
         player.attack = attack;
-        if (!eatPerson(attack) && !attackEnemies(attack) && (onFacade || climbing) && attack.xDir == climbContact.attackDir)
+        if (!eatPerson(attack) && !attackEnemies(attack) && (onFacade || climbing))
         {
-            damageBuildings(climbContact, attack);
+            if (attack.xDir == climbContact.attackDir) damageBuildings(climbContact, attack);
+            else damageBuildingAtAttack(attack);
         }
     }
 
