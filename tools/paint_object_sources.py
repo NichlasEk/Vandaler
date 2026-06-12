@@ -8,7 +8,6 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "art/source/objects"
 AI_SHEET = ROOT / "art/source/objects_ai_sheet_01.png"
-WALK_SHEET = ROOT / "art/source/walk_ai_sheet_01.png"
 
 
 def remove_magenta(im: Image.Image) -> Image.Image:
@@ -17,7 +16,7 @@ def remove_magenta(im: Image.Image) -> Image.Image:
     for y in range(rgba.height):
         for x in range(rgba.width):
             r, g, b, a = px[x, y]
-            if r > 150 and b > 150 and g < 120 and r > (g * 2) and b > (g * 2):
+            if r > 205 and g < 85 and b > 185:
                 px[x, y] = (0, 0, 0, 0)
             else:
                 px[x, y] = (r, g, b, a)
@@ -66,83 +65,36 @@ def sheet_from_frames(frames: list[Image.Image], frame_w: int, frame_h: int) -> 
     return out
 
 
-def repair_tiny_frames(frames: list[Image.Image], min_area: int) -> list[Image.Image]:
-    out: list[Image.Image] = []
-    for i, frame in enumerate(frames):
-        bbox = frame.getchannel("A").getbbox()
-        area = 0 if bbox is None else (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
-        if area < min_area and out:
-            frame = ImageChops.offset(out[-1], 1 if (i & 1) else -1, 0)
-        out.append(frame)
+def add_muzzle_flash(frame: Image.Image, x: int, y: int) -> Image.Image:
+    out = frame.copy()
+    draw = ImageDraw.Draw(out)
+    draw.polygon([(x, y), (x + 5, y - 2), (x + 9, y), (x + 5, y + 2)], fill=(255, 196, 0, 255))
+    draw.point((x + 8, y), fill=(255, 32, 0, 255))
+    draw.point((x + 4, y), fill=(255, 255, 255, 255))
     return out
-
-
-def offset_no_wrap(frame: Image.Image, dx: int, dy: int = 0) -> Image.Image:
-    out = Image.new("RGBA", frame.size, (0, 0, 0, 0))
-    out.alpha_composite(frame, (dx, dy))
-    return out
-
-
-def write_monster_walks(walk_sheet: Image.Image) -> None:
-    rows = {
-        "jonny": [
-            (85, 35, 340, 218),
-            (425, 35, 690, 218),
-            (750, 35, 1015, 218),
-            (1070, 35, 1335, 218),
-        ],
-        "conny": [
-            (80, 230, 350, 405),
-            (420, 230, 695, 405),
-            (740, 230, 1020, 405),
-            (1060, 230, 1335, 405),
-        ],
-        "bettan": [
-            (80, 410, 365, 595),
-            (420, 410, 710, 595),
-            (735, 410, 1035, 595),
-            (1060, 410, 1350, 595),
-        ],
-    }
-    poses = ("walk_a", "walk_b", "walk_c", "walk_d")
-    for monster, boxes in rows.items():
-        out_dir = ROOT / "art/source/monsters" / monster
-        out_dir.mkdir(parents=True, exist_ok=True)
-        for pose, box in zip(poses, boxes):
-            frame = trim(crop(walk_sheet, box), padding=8)
-            frame = frame.resize((max(1, int(frame.width * 0.50)), frame.height), Image.Resampling.BICUBIC)
-            scale = 430 / frame.height
-            frame = frame.resize((max(1, int(frame.width * scale)), 430), Image.Resampling.BICUBIC)
-            frame.save(out_dir / f"{pose}.png")
 
 
 def main() -> None:
     if not AI_SHEET.exists():
         raise SystemExit(f"Missing AI sprite sheet: {AI_SHEET}")
-    if not WALK_SHEET.exists():
-        raise SystemExit(f"Missing AI walk sheet: {WALK_SHEET}")
 
     OUT.mkdir(parents=True, exist_ok=True)
     sheet = Image.open(AI_SHEET).convert("RGBA")
-    walk_sheet = Image.open(WALK_SHEET).convert("RGBA")
-    write_monster_walks(walk_sheet)
 
     enemy_boxes = [
-        (110, 575, 285, 720),
-        (450, 575, 635, 720),
-        (780, 575, 975, 720),
+        (84, 62, 255, 276),
+        (440, 70, 650, 276),
+        (795, 65, 1070, 255),
     ]
-    enemy = repair_tiny_frames([fit(crop(walk_sheet, box), 24, 16, margin=1) for box in enemy_boxes], min_area=70)
-    enemy.append(offset_no_wrap(enemy[1], 1))
+    enemy = [fit(crop(sheet, box), 24, 16, margin=1) for box in enemy_boxes]
     sheet_from_frames(enemy, 24, 16).save(OUT / "enemy.png")
 
     tank_boxes = [
-        (70, 855, 385, 1010),
-        (405, 855, 725, 1010),
-        (740, 855, 1065, 1010),
+        (55, 330, 410, 535),
+        (525, 330, 880, 535),
+        (980, 330, 1395, 535),
     ]
-    tank = repair_tiny_frames([fit(crop(walk_sheet, box), 24, 16, margin=0) for box in tank_boxes], min_area=120)
-    tank.append(offset_no_wrap(tank[1], 1))
+    tank = [fit(crop(sheet, box), 24, 16, margin=0) for box in tank_boxes]
     sheet_from_frames(tank, 24, 16).save(OUT / "tank.png")
 
     heli_boxes = [
@@ -154,14 +106,8 @@ def main() -> None:
     heli = [fit(crop(sheet, box), 32, 16, margin=0) for box in heli_boxes]
     sheet_from_frames(heli, 32, 16).save(OUT / "helicopter.png")
 
-    person_boxes = [
-        (120, 680, 305, 825),
-        (455, 680, 640, 825),
-        (780, 680, 970, 825),
-        (1110, 680, 1305, 825),
-    ]
-    person = repair_tiny_frames([fit(crop(walk_sheet, box), 8, 16, margin=0) for box in person_boxes], min_area=30)
-    sheet_from_frames(person, 8, 16).save(OUT / "person.png")
+    person = fit(crop(sheet, (155, 825, 260, 950)), 8, 16, margin=0)
+    person.save(OUT / "person.png")
 
     shot = fit(crop(sheet, (420, 830, 625, 925)), 8, 8, margin=0)
     shot.save(OUT / "shot.png")

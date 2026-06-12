@@ -26,7 +26,7 @@
 #define PLAYER_SPRITE_Y_OFFSET 9
 #define PLAYER_CLIMB_SPRITE_X_OFFSET 9
 #define GROUND_SPRITE_Y_OFFSET 8
-#define PLAYER_SPRITE_FRAMES 16
+#define PLAYER_SPRITE_FRAMES 14
 #define POSE_IDLE 0
 #define POSE_CLIMB_UP 1
 #define POSE_PUNCH 2
@@ -41,8 +41,6 @@
 #define POSE_CLIMB_PUNCH_OUT 11
 #define POSE_WALK_A 12
 #define POSE_WALK_B 13
-#define POSE_WALK_C 14
-#define POSE_WALK_D 15
 #define POSE_STUNNED POSE_PUNCH_DIAG_DOWN
 #define PLAYER_HURT_X 14
 #define PLAYER_HURT_Y 10
@@ -918,8 +916,8 @@ static void updatePlayerSprite(void)
     if (player.stunTimer > 0) spriteFrame += POSE_STUNNED;
     else if (player.punching) spriteFrame += player.attackPose;
     else if (visuallyClimbing) spriteFrame += player.climbPose;
-    else if (player.landTimer > 0) spriteFrame += (player.landTimer & 4) ? POSE_WALK_A : POSE_WALK_C;
-    else if (player.walking) spriteFrame += POSE_WALK_A + ((frame >> 2) & 3);
+    else if (player.landTimer > 0) spriteFrame += (player.landTimer & 4) ? POSE_WALK_A : POSE_WALK_B;
+    else if (player.walking) spriteFrame += (frame & 8) ? POSE_WALK_A : POSE_WALK_B;
     if (visuallyClimbing)
     {
         spriteX += climbContact.attackDir > 0 ? PLAYER_CLIMB_SPRITE_X_OFFSET : -PLAYER_CLIMB_SPRITE_X_OFFSET;
@@ -941,7 +939,6 @@ static void updateThreatSprites(void)
         SPR_setVisibility(e->sprite, e->active ? VISIBLE : HIDDEN);
         if (e->active)
         {
-            SPR_setFrame(e->sprite, (frame >> 2) & 3);
             SPR_setHFlip(e->sprite, e->speed < 0);
             SPR_setPosition(e->sprite, e->x, e->y + GROUND_SPRITE_Y_OFFSET);
         }
@@ -957,7 +954,6 @@ static void updateThreatSprites(void)
         SPR_setVisibility(t->sprite, t->active ? VISIBLE : HIDDEN);
         if (t->active)
         {
-            SPR_setFrame(t->sprite, (frame >> 3) & 3);
             SPR_setHFlip(t->sprite, t->speed < 0);
             SPR_setPosition(t->sprite, t->x, t->y + GROUND_SPRITE_Y_OFFSET);
         }
@@ -1000,7 +996,6 @@ static void updateThreatSprites(void)
         SPR_setVisibility(p->sprite, p->active ? VISIBLE : HIDDEN);
         if (p->active)
         {
-            SPR_setFrame(p->sprite, p->falling ? 0 : ((frame >> 2) & 3));
             SPR_setHFlip(p->sprite, p->speed < 0);
             SPR_setPosition(p->sprite, p->x, p->y + (p->falling ? 0 : GROUND_SPRITE_Y_OFFSET));
         }
