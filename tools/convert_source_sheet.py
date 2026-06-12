@@ -13,19 +13,19 @@ DEFAULT_PREVIEW = ROOT / "art/source/vandaler_converted_preview.png"
 
 PALETTE = [
     (0, 0, 0),        # 0 transparent / black key
-    (0, 70, 255),     # 1 sky blue
+    (0, 36, 182),     # 1 night sky blue
     (0, 0, 0),        # 2 outline
-    (128, 128, 128),  # 3 grey
+    (109, 109, 146),  # 3 cool concrete grey
     (0, 210, 50),     # 4 green
-    (0, 120, 40),     # 5 dark green
-    (120, 190, 255),  # 6 glass blue
-    (255, 190, 0),    # 7 warm yellow
+    (0, 109, 36),     # 5 dark green
+    (109, 182, 255),  # 6 glass blue
+    (182, 109, 36),   # 7 brick brown
     (255, 30, 0),     # 8 red
     (255, 255, 255),  # 9 white
-    (150, 80, 0),     # 10 brown
-    (25, 25, 65),     # 11 deep shadow
-    (0, 0, 170),      # 12 deep blue
-    (255, 220, 70),   # 13 highlight
+    (109, 36, 0),     # 10 brown shadow
+    (36, 36, 109),    # 11 deep shadow
+    (0, 0, 109),      # 12 deep blue
+    (255, 182, 73),   # 13 warm highlight
     (0, 0, 0),        # 14 spare black
     (255, 255, 255),  # 15 spare white
 ]

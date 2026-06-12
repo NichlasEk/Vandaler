@@ -1,3 +1,5 @@
+IMAGE title_screen "images/title.png" BEST
+IMAGE select_screen "images/select.png" BEST
 SPRITE monster_sprite "images/monsters.png" 6 7 NONE 0
 SPRITE enemy_sprite "images/enemy.png" 3 2 NONE 0
 SPRITE tank_sprite "images/tank.png" 3 2 NONE 0

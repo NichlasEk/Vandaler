@@ -200,17 +200,33 @@ def build_object(obj: dict[str, Any], warnings: list[str]) -> None:
         raise SystemExit(f"Missing object source: {source_path}")
 
     source = Image.open(source_path).convert("RGBA")
-    cleaned = clean_source(source, min_area=10, trim_padding=4)
-    base = fit_to_frame(cleaned, frame_w, frame_h, margin=1, offset=(0, 0))
     sheet = Image.new("P", (frame_w * frames, frame_h), 0)
     sheet.putpalette(PAL_IMG.getpalette())
 
-    for frame_index in range(frames):
-        frame = base
-        if frame_index:
-            frame = ImageChops.offset(frame, frame_index % 2, 0)
-        warnings.extend(validate_frame(f"{obj['name']}:{frame_index}", frame))
-        sheet.paste(quantize(frame, opaque_zero_index=11), (frame_index * frame_w, 0))
+    def object_quantize(frame: Image.Image) -> Image.Image:
+        q = quantize(frame, opaque_zero_index=11)
+        if obj["name"] in {"enemy", "tank", "helicopter"}:
+            remap = {7: 5, 10: 5, 13: 4}
+            src = q.load()
+            for y in range(q.height):
+                for x in range(q.width):
+                    src[x, y] = remap.get(src[x, y], src[x, y])
+        return q
+
+    if source.size == (frame_w * frames, frame_h):
+        for frame_index in range(frames):
+            frame = source.crop((frame_index * frame_w, 0, (frame_index + 1) * frame_w, frame_h))
+            warnings.extend(validate_frame(f"{obj['name']}:{frame_index}", frame))
+            sheet.paste(object_quantize(frame), (frame_index * frame_w, 0))
+    else:
+        cleaned = clean_source(source, min_area=10, trim_padding=4)
+        base = fit_to_frame(cleaned, frame_w, frame_h, margin=1, offset=(0, 0))
+        for frame_index in range(frames):
+            frame = base
+            if frame_index:
+                frame = ImageChops.offset(frame, frame_index % 2, 0)
+            warnings.extend(validate_frame(f"{obj['name']}:{frame_index}", frame))
+            sheet.paste(object_quantize(frame), (frame_index * frame_w, 0))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(out_path)

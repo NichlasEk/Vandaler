@@ -16,12 +16,16 @@
 #define MAX_EXPLOSIONS 4
 #define MAX_DAMAGE_MARKS 16
 #define MAX_WINDOW_PEOPLE 4
+#define BUILDING_CRACK_STEP_FRAMES 8
+#define BUILDING_COLLAPSE_STEP_FRAMES 6
+#define PLAYER_STUN_FRAMES 90
 #define PLAYER_MAX_HEALTH 8
 #define PLAYER_W 48
 #define PLAYER_H 56
 #define PLAYER_GROUND_Y ((FLOOR_Y - 7) * 8)
 #define PLAYER_SPRITE_Y_OFFSET 9
 #define PLAYER_CLIMB_SPRITE_X_OFFSET 9
+#define GROUND_SPRITE_Y_OFFSET 8
 #define PLAYER_SPRITE_FRAMES 14
 #define POSE_IDLE 0
 #define POSE_CLIMB_UP 1
@@ -37,6 +41,7 @@
 #define POSE_CLIMB_PUNCH_OUT 11
 #define POSE_WALK_A 12
 #define POSE_WALK_B 13
+#define POSE_STUNNED POSE_PUNCH_DIAG_DOWN
 #define PLAYER_HURT_X 14
 #define PLAYER_HURT_Y 10
 #define PLAYER_HURT_W 20
@@ -72,12 +77,18 @@
 #define TILE_WIN_ON  (TILE_USER_INDEX + 5)
 #define TILE_WIN_OFF (TILE_USER_INDEX + 6)
 #define TILE_CRACK   (TILE_USER_INDEX + 7)
-#define TILE_RED     (TILE_USER_INDEX + 8)
-#define TILE_WHITE   (TILE_USER_INDEX + 9)
-#define TILE_YELLOW  (TILE_USER_INDEX + 10)
-#define TILE_A_RING  (TILE_USER_INDEX + 11)
-#define TILE_A_UML   (TILE_USER_INDEX + 12)
-#define TILE_O_UML   (TILE_USER_INDEX + 13)
+#define TILE_CRACK_SMALL (TILE_USER_INDEX + 8)
+#define TILE_CRACK_MID   (TILE_USER_INDEX + 9)
+#define TILE_CRACK_LARGE (TILE_USER_INDEX + 10)
+#define TILE_DUST_1      (TILE_USER_INDEX + 11)
+#define TILE_DUST_2      (TILE_USER_INDEX + 12)
+#define TILE_DUST_3      (TILE_USER_INDEX + 13)
+#define TILE_RED         (TILE_USER_INDEX + 14)
+#define TILE_WHITE       (TILE_USER_INDEX + 15)
+#define TILE_YELLOW      (TILE_USER_INDEX + 16)
+#define TILE_A_RING      (TILE_USER_INDEX + 17)
+#define TILE_A_UML       (TILE_USER_INDEX + 18)
+#define TILE_O_UML       (TILE_USER_INDEX + 19)
 
 typedef enum
 {
@@ -120,6 +131,7 @@ typedef struct
     u8 attackPose;
     u8 climbPose;
     u8 landTimer;
+    u8 stunTimer;
     u8 gravityTimer;
     AttackBox attack;
     bool walking;
@@ -140,6 +152,12 @@ typedef struct
     bool personAlive[MAX_WINDOW_PEOPLE];
     bool personEdible[MAX_WINDOW_PEOPLE];
     u8 colorPal;
+    u8 crackTimer;
+    u8 crackRows;
+    u8 collapseTimer;
+    u8 collapseRows;
+    bool cracking;
+    bool collapsing;
     bool alive;
 } Building;
 
@@ -224,7 +242,7 @@ typedef struct
     u8 building;
 } RoofContact;
 
-static const u32 tileSky[8]     = {0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111};
+static const u32 tileSky[8]     = {0x11111111,0x111C1111,0x11111111,0x111111C1,0x11111111,0x11C11111,0x11111111,0x11111C11};
 static const u32 tileDark[8]    = {0xBBBBBBBB,0xB2B2B2B2,0xBBBBBBBB,0x2B2B2B2B,0xBBBBBBBB,0xB2B2B2B2,0xBBBBBBBB,0x2B2B2B2B};
 static const u32 tileRoad[8]    = {0x3B333333,0x333333B3,0x333B3333,0x33333333,0xB333333B,0x33333B33,0x33333333,0x33B33333};
 static const u32 tileLine[8]    = {0x33333333,0x33333333,0x33333333,0x99999999,0x99999999,0x33333333,0x33333333,0x33333333};
@@ -232,6 +250,12 @@ static const u32 tileGreen[8]   = {0x00044000,0x004C4400,0x04444440,0x0C4444C0,0
 static const u32 tileWinOn[8]   = {0x00000000,0x02222200,0x02666200,0x026C6200,0x02666200,0x02222200,0x00000000,0x00000000};
 static const u32 tileWinOff[8]  = {0x00000000,0x02222200,0x02222200,0x02000200,0x02000200,0x02222200,0x00000000,0x00000000};
 static const u32 tileCrack[8]   = {0x00080000,0x00028000,0x00888000,0x08820000,0x00288000,0x00028800,0x00008000,0x00000000};
+static const u32 tileCrackSmall[8] = {0x00000000,0x00080000,0x00088000,0x00028000,0x00008800,0x00000800,0x00000000,0x00000000};
+static const u32 tileCrackMid[8]   = {0x00080000,0x00088000,0x00828000,0x08880000,0x00288000,0x00028800,0x00008000,0x00000000};
+static const u32 tileCrackLarge[8] = {0x80008000,0x88088000,0x02880000,0x08888200,0x00288000,0x08228800,0x88008000,0x80000080};
+static const u32 tileDust1[8]   = {0x00000000,0x00000000,0x00000000,0x90909090,0x09999990,0x999F9999,0x09F99990,0x00000000};
+static const u32 tileDust2[8]   = {0x00000000,0x00000000,0x09090000,0x99999990,0x9F9F9F99,0x99999999,0x09999900,0x00000000};
+static const u32 tileDust3[8]   = {0x00000000,0x09009000,0x99999909,0x9F999999,0x999F9F99,0x09999990,0x00099000,0x00000000};
 static const u32 tileRed[8]     = {0x88888888,0x8D8D8D8D,0xDDDDDDDD,0x88888888,0x8D8D8D8D,0xDDDDDDDD,0x88888888,0x88888888};
 static const u32 tileWhite[8]   = {0x99999999,0x9F9F9F9F,0xFFFFFFFF,0x99999999,0x99999999,0xFFFFFFFF,0x9F9F9F9F,0x99999999};
 static const u32 tileYellow[8]  = {0xDDDDDDDD,0xD77777DD,0xD77777DD,0xD7777DDD,0xD77777DD,0xD77777DD,0xDD7777DD,0xDDDDDDDD};
@@ -242,19 +266,19 @@ static const u32 tileOUml[8]    = {0x00F00F00,0x00000000,0x00FFFF00,0x0F0000F0,0
 static const u16 palette0[16] =
 {
     RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(0,2,7),
+    RGB3_3_3_TO_VDPCOLOR(0,1,5),
     RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(4,4,4),
+    RGB3_3_3_TO_VDPCOLOR(3,3,4),
     RGB3_3_3_TO_VDPCOLOR(0,6,1),
-    RGB3_3_3_TO_VDPCOLOR(0,4,1),
-    RGB3_3_3_TO_VDPCOLOR(4,6,7),
-    RGB3_3_3_TO_VDPCOLOR(7,5,0),
+    RGB3_3_3_TO_VDPCOLOR(0,3,1),
+    RGB3_3_3_TO_VDPCOLOR(3,5,7),
+    RGB3_3_3_TO_VDPCOLOR(5,3,1),
     RGB3_3_3_TO_VDPCOLOR(7,1,0),
     RGB3_3_3_TO_VDPCOLOR(7,7,7),
-    RGB3_3_3_TO_VDPCOLOR(4,2,0),
+    RGB3_3_3_TO_VDPCOLOR(3,1,0),
     RGB3_3_3_TO_VDPCOLOR(1,1,3),
-    RGB3_3_3_TO_VDPCOLOR(0,0,5),
-    RGB3_3_3_TO_VDPCOLOR(7,6,2),
+    RGB3_3_3_TO_VDPCOLOR(0,0,3),
+    RGB3_3_3_TO_VDPCOLOR(7,5,2),
     RGB3_3_3_TO_VDPCOLOR(0,0,0),
     RGB3_3_3_TO_VDPCOLOR(7,7,7)
 };
@@ -281,6 +305,14 @@ static const u16 paletteLizard[16] =
     RGB3_3_3_TO_VDPCOLOR(7,7,0), RGB3_3_3_TO_VDPCOLOR(7,7,7), RGB3_3_3_TO_VDPCOLOR(7,1,0), RGB3_3_3_TO_VDPCOLOR(0,0,0),
     RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0),
     RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0)
+};
+
+static const u16 paletteSelectOverlay[16] =
+{
+    RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0),
+    RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0),
+    RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0),
+    RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(7,6,0)
 };
 
 static const MonsterDef monsters[MAX_MONSTERS] =
@@ -325,9 +357,34 @@ static bool hudFrameReady = FALSE;
 static u16 hudScore = 0xFFFF;
 static u8 hudHealth = 0xFF;
 static u8 hudCity = 0xFF;
+static u8 selectOverlayMonster = 0xFF;
+static bool selectOverlayVisible = FALSE;
 
 static ClimbContact getClimbContact(void);
 static RoofContact getRoofContact(void);
+static void loadTiles(void);
+static void hidePlayerSprite(void);
+static void hideThreatSprites(void);
+static void resetSpriteEngineState(void);
+
+static void loadGameVideo(void)
+{
+    PAL_setPalette(PAL0, palette0, DMA);
+    PAL_setPalette(PAL1, paletteApe, DMA);
+    PAL_setPalette(PAL2, paletteWolf, DMA);
+    PAL_setPalette(PAL3, paletteLizard, DMA);
+    loadTiles();
+}
+
+static void drawFullscreenImage(const Image *image)
+{
+    hidePlayerSprite();
+    hideThreatSprites();
+    VDP_clearPlane(BG_A, TRUE);
+    VDP_clearPlane(BG_B, TRUE);
+    PAL_setPalette(PAL0, image->palette->data, DMA);
+    VDP_drawImageEx(BG_B, image, TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, TILE_USER_INDEX), 0, 0, FALSE, TRUE);
+}
 
 static u16 attr(u8 pal, u16 tile)
 {
@@ -419,6 +476,12 @@ static void loadTiles(void)
     VDP_loadTileData(tileWinOn, TILE_WIN_ON, 1, DMA);
     VDP_loadTileData(tileWinOff, TILE_WIN_OFF, 1, DMA);
     VDP_loadTileData(tileCrack, TILE_CRACK, 1, DMA);
+    VDP_loadTileData(tileCrackSmall, TILE_CRACK_SMALL, 1, DMA);
+    VDP_loadTileData(tileCrackMid, TILE_CRACK_MID, 1, DMA);
+    VDP_loadTileData(tileCrackLarge, TILE_CRACK_LARGE, 1, DMA);
+    VDP_loadTileData(tileDust1, TILE_DUST_1, 1, DMA);
+    VDP_loadTileData(tileDust2, TILE_DUST_2, 1, DMA);
+    VDP_loadTileData(tileDust3, TILE_DUST_3, 1, DMA);
     VDP_loadTileData(tileRed, TILE_RED, 1, DMA);
     VDP_loadTileData(tileWhite, TILE_WHITE, 1, DMA);
     VDP_loadTileData(tileYellow, TILE_YELLOW, 1, DMA);
@@ -563,44 +626,114 @@ static void initBuildings(void)
             buildings[i].personEdible[p] = ((i + p) & 1) == 0;
         }
         buildings[i].colorPal = PAL0;
+        buildings[i].crackTimer = 0;
+        buildings[i].crackRows = 0;
+        buildings[i].collapseTimer = 0;
+        buildings[i].collapseRows = 0;
+        buildings[i].cracking = FALSE;
+        buildings[i].collapsing = FALSE;
         buildings[i].alive = TRUE;
+    }
+}
+
+static void drawDamageTile(u8 x, u8 y, u8 tile)
+{
+    if (y >= HUD_TILES_H && y < FLOOR_Y && x < SCREEN_TILES_W)
+    {
+        VDP_setTileMapXY(BG_B, attr(PAL0, tile), x, y);
+    }
+}
+
+static void drawCollapseDust(const Building *b, u8 y, u8 phase)
+{
+    if (y < HUD_TILES_H) y = HUD_TILES_H;
+    if (y >= FLOOR_Y) y = FLOOR_Y - 1;
+
+    for (u8 xx = 0; xx < b->w; xx++)
+    {
+        const u8 dust = TILE_DUST_1 + ((xx + phase) % 3);
+        drawDamageTile(b->x + xx, y, dust);
+        if ((xx + phase) & 1) drawDamageTile(b->x + xx, y + 1, TILE_DUST_1 + ((xx + phase + 1) % 3));
+    }
+}
+
+static void drawBuildingCracks(const Building *b, u8 visibleH)
+{
+    const u8 waveRows = b->crackRows > (b->h - 2) ? b->h - 2 : b->crackRows;
+    const u8 waveTop = (FLOOR_Y - 1 > waveRows) ? FLOOR_Y - 1 - waveRows : b->y;
+
+    if (waveRows == 0) return;
+
+    for (u8 yy = waveTop; yy < FLOOR_Y && yy < b->y + visibleH; yy++)
+    {
+        const u8 rel = yy - b->y;
+        if (rel == 0 || rel >= visibleH) continue;
+
+        const u8 xA = b->x + 1 + ((yy + b->crackRows) % (b->w - 1));
+        const u8 xB = b->x + ((yy + b->crackRows + 2) % b->w);
+        drawDamageTile(xA, yy, (rel & 1) ? TILE_CRACK_SMALL : TILE_CRACK_MID);
+        if ((b->crackRows > 5) && ((yy + b->x) & 1)) drawDamageTile(xB, yy, TILE_CRACK_SMALL);
+    }
+
+}
+
+static void drawBuildingChunks(const Building *b, u8 visibleH, u8 drawY)
+{
+    for (u8 d = 0; d < b->damage && d < MAX_DAMAGE_MARKS; d++)
+    {
+        const u8 cx = b->damageX[d];
+        const u8 cy = b->damageY[d];
+        if (cy < drawY || cy >= drawY + visibleH) continue;
+
+        drawDamageTile(cx, cy, TILE_DARK);
+        if (cx > b->x && (d & 1)) drawDamageTile(cx - 1, cy, TILE_WIN_OFF);
+        if (cx + 1 < b->x + b->w && (d & 2)) drawDamageTile(cx + 1, cy, TILE_DARK);
+        if (cy + 1 < drawY + visibleH) drawDamageTile(cx, cy + 1, (d & 1) ? TILE_DARK : TILE_WIN_OFF);
+        if (cy > drawY && (d & 3) == 0) drawDamageTile(cx, cy - 1, TILE_WIN_OFF);
     }
 }
 
 static void drawBuilding(const Building *b)
 {
-    if (!b->alive) return;
+    if (!b->alive && !b->collapsing) return;
 
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_YELLOW), b->x, b->y, b->w, b->h);
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WHITE), b->x, b->y, b->w, 1);
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), b->x, b->y, 1, b->h);
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_RED), b->x + 1, b->y + b->h - 2, b->w - 2, 1);
-    if (b->w > 4)
+    const u8 visibleH = b->collapseRows >= b->h ? 0 : b->h - b->collapseRows;
+    const u8 drawY = b->collapsing ? b->y + b->collapseRows : b->y;
+    if (visibleH == 0)
     {
-        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_YELLOW), b->x + b->w - 1, b->y + 1, 1, b->h - 2);
+        drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+        return;
     }
-    for (u8 yy = 1; yy < b->h; yy += 2)
+
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_YELLOW), b->x, drawY, b->w, visibleH);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WHITE), b->x, drawY, b->w, 1);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), b->x, drawY, 1, visibleH);
+    if (!b->collapsing && visibleH > 2) VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_RED), b->x + 1, drawY + visibleH - 2, b->w - 2, 1);
+    if (b->w > 4 && visibleH > 2)
+    {
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_YELLOW), b->x + b->w - 1, drawY + 1, 1, visibleH - 2);
+    }
+    for (u8 yy = 1; yy < visibleH; yy += 2)
     {
         for (u8 xx = 1; xx + 1 < b->w; xx += 2)
         {
-            const bool broken = ((xx + yy + b->damage) & 3) == 0;
-            VDP_setTileMapXY(BG_B, attr(PAL0, broken ? TILE_WIN_OFF : TILE_WIN_ON), b->x + xx, b->y + yy);
+            const bool broken = ((xx + yy) & 5) == 0;
+            VDP_setTileMapXY(BG_B, attr(PAL0, broken ? TILE_WIN_OFF : TILE_WIN_ON), b->x + xx, drawY + yy);
         }
     }
-    if (b->h > 5 && b->w > 3)
+    if (!b->collapsing && visibleH > 5 && b->w > 3)
     {
-        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_DARK), b->x + 1, b->y + b->h - 1);
-        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WHITE), b->x + 2, b->y + b->h - 1);
+        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_DARK), b->x + 1, drawY + visibleH - 1);
+        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WHITE), b->x + 2, drawY + visibleH - 1);
     }
-    for (u8 d = 0; d < b->damage && d < MAX_DAMAGE_MARKS; d++)
-    {
-        const u8 cx = b->damageX[d];
-        const u8 cy = b->damageY[d];
-        if (cy < FLOOR_Y) VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CRACK), cx, cy);
-    }
+    drawBuildingChunks(b, visibleH, drawY);
+    if (b->cracking) drawBuildingCracks(b, visibleH);
+    if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+
     for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
     {
         if (!b->personAlive[p]) continue;
+        if (b->personY[p] < drawY || b->personY[p] >= drawY + visibleH) continue;
         VDP_setTileMapXY(BG_B, attr(PAL0, b->personEdible[p] ? TILE_GREEN : TILE_WHITE), b->personX[p], b->personY[p]);
     }
 }
@@ -653,7 +786,7 @@ static void drawHud(void)
     }
 }
 
-static void drawMonsterBody(s16 tx, s16 ty, u8 monster, bool big, bool punch)
+static void __attribute__((unused)) drawMonsterBody(s16 tx, s16 ty, u8 monster, bool big, bool punch)
 {
     // Temporary tilemap monster: keep dimensions fixed so climb/punch never changes silhouette.
     const u8 pal = monsters[monster].pal;
@@ -732,6 +865,18 @@ static void hideThreatSprites(void)
     }
 }
 
+static void resetSpriteEngineState(void)
+{
+    SPR_reset();
+    playerSprite = NULL;
+    for (u8 i = 0; i < MAX_ENEMIES; i++) enemies[i].sprite = NULL;
+    for (u8 i = 0; i < MAX_TANKS; i++) tanks[i].sprite = NULL;
+    for (u8 i = 0; i < MAX_HELIS; i++) helis[i].sprite = NULL;
+    for (u8 i = 0; i < MAX_SHOTS; i++) shots[i].sprite = NULL;
+    for (u8 i = 0; i < MAX_PEOPLE; i++) people[i].sprite = NULL;
+    for (u8 i = 0; i < MAX_EXPLOSIONS; i++) explosions[i].sprite = NULL;
+}
+
 static void showPlayerSprite(void)
 {
     if (playerSprite == NULL)
@@ -753,7 +898,8 @@ static void updatePlayerSprite(void)
 
     showPlayerSprite();
     SPR_setPalette(playerSprite, pal);
-    if (player.punching) spriteFrame += player.attackPose;
+    if (player.stunTimer > 0) spriteFrame += POSE_STUNNED;
+    else if (player.punching) spriteFrame += player.attackPose;
     else if (visuallyClimbing) spriteFrame += player.climbPose;
     else if (player.landTimer > 0) spriteFrame += (player.landTimer & 4) ? POSE_WALK_A : POSE_WALK_B;
     else if (player.walking) spriteFrame += (frame & 8) ? POSE_WALK_A : POSE_WALK_B;
@@ -779,7 +925,7 @@ static void updateThreatSprites(void)
         if (e->active)
         {
             SPR_setHFlip(e->sprite, e->speed < 0);
-            SPR_setPosition(e->sprite, e->x, e->y);
+            SPR_setPosition(e->sprite, e->x, e->y + GROUND_SPRITE_Y_OFFSET);
         }
     }
 
@@ -794,7 +940,7 @@ static void updateThreatSprites(void)
         if (t->active)
         {
             SPR_setHFlip(t->sprite, t->speed < 0);
-            SPR_setPosition(t->sprite, t->x, t->y);
+            SPR_setPosition(t->sprite, t->x, t->y + GROUND_SPRITE_Y_OFFSET);
         }
     }
 
@@ -835,7 +981,7 @@ static void updateThreatSprites(void)
         if (p->active)
         {
             SPR_setHFlip(p->sprite, p->speed < 0);
-            SPR_setPosition(p->sprite, p->x, p->y);
+            SPR_setPosition(p->sprite, p->x, p->y + (p->falling ? 0 : GROUND_SPRITE_Y_OFFSET));
         }
     }
 
@@ -850,49 +996,42 @@ static void updateThreatSprites(void)
         if (ex->active)
         {
             SPR_setFrame(ex->sprite, ex->timer < 5 ? 1 : 0);
-            SPR_setPosition(ex->sprite, ex->x, ex->y);
+            SPR_setPosition(ex->sprite, ex->x, ex->y + (ex->y >= ((FLOOR_Y * 8) - 20) ? GROUND_SPRITE_Y_OFFSET : 0));
         }
     }
 }
 
 static void drawTitle(void)
 {
-    hidePlayerSprite();
-    hideThreatSprites();
-    clearAll();
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_SKY), 0, 0, SCREEN_TILES_W, SCREEN_TILES_H);
-    drawSkyline();
-    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_SKY), 0, 0, SCREEN_TILES_W, SCREEN_TILES_H);
+    drawFullscreenImage(&title_screen);
+}
 
-    VDP_setTextPalette(PAL0);
-    VDP_drawText("VANDALER", 12, 6);
-    drawTextSv("SVENSK STADSFÖRSTÖRELSE", 7, 10);
-    VDP_drawText("START", 17, 18);
-    drawMonsterBody(4, 11, 0, TRUE, TRUE);
-    drawMonsterBody(29, 11, 2, TRUE, FALSE);
+static void drawSelectOverlay(void)
+{
+    static const u8 markerX[MAX_MONSTERS] = {5, 18, 31};
+    const bool visible = (frame & 16) == 0;
+    if (selectOverlayMonster == selectedMonster && selectOverlayVisible == visible)
+    {
+        return;
+    }
+
+    selectOverlayMonster = selectedMonster;
+    selectOverlayVisible = visible;
+    VDP_fillTileMapRect(BG_A, 0, 0, 22, SCREEN_TILES_W, 5);
+    VDP_setTextPalette(PAL3);
+    if (visible)
+    {
+        VDP_drawText("VALD", markerX[selectedMonster], 23);
+        VDP_drawText(monsters[selectedMonster].name, markerX[selectedMonster] - 1, 24);
+    }
 }
 
 static void drawSelect(void)
 {
-    hidePlayerSprite();
-    hideThreatSprites();
-    clearAll();
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), 0, 0, SCREEN_TILES_W, SCREEN_TILES_H);
-    VDP_setTextPalette(PAL0);
-    drawTextSv("VÄLJ MONSTER", 14, 3);
-
-    for (u8 i = 0; i < MAX_MONSTERS; i++)
-    {
-        const s16 x = 5 + (i * 11);
-        VDP_drawText(monsters[i].name, x, 7);
-        VDP_drawText(monsters[i].species, x + 1, 8);
-        drawMonsterBody(x, 11, i, TRUE, selectedMonster == i);
-        if (selectedMonster == i)
-        {
-            VDP_drawText(">", x - 2, 13);
-            VDP_drawText("<", x + 6, 13);
-        }
-    }
+    drawFullscreenImage(&select_screen);
+    PAL_setPalette(PAL3, paletteSelectOverlay, DMA);
+    selectOverlayMonster = 0xFF;
+    drawSelectOverlay();
 }
 
 static void drawIntro(void)
@@ -920,6 +1059,7 @@ static void startCity(void)
     player.attackPose = POSE_PUNCH;
     player.climbPose = POSE_CLIMB_UP;
     player.landTimer = 0;
+    player.stunTimer = 0;
     player.gravityTimer = 0;
     player.walking = FALSE;
     player.grounded = TRUE;
@@ -1039,6 +1179,18 @@ static void releaseWindowPeopleNear(Building *b, u8 hitX, u8 hitY)
     }
 }
 
+static void releaseWindowPeopleAbove(Building *b, u8 tileY)
+{
+    for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
+    {
+        if (!b->personAlive[p]) continue;
+        if (b->personY[p] >= tileY) continue;
+
+        b->personAlive[p] = FALSE;
+        spawnPerson((s16)b->personX[p] * 8, (s16)b->personY[p] * 8, TRUE, b->personEdible[p]);
+    }
+}
+
 static void spawnExplosion(s16 x, s16 y)
 {
     for (u8 i = 0; i < MAX_EXPLOSIONS; i++)
@@ -1066,6 +1218,20 @@ static void hitPlayer(void)
     {
         state = STATE_GAME_OVER;
     }
+}
+
+static void incapacitatePlayer(void)
+{
+    hitPlayer();
+    player.y = PLAYER_GROUND_Y;
+    player.vy = 0;
+    player.punching = FALSE;
+    player.punchTimer = 0;
+    player.walking = FALSE;
+    player.grounded = TRUE;
+    player.stunTimer = PLAYER_STUN_FRAMES;
+    player.landTimer = PLAYER_STUN_FRAMES;
+    playTone(48, 18);
 }
 
 static bool rectsOverlap(s16 ax, s16 ay, s16 aw, s16 ah, s16 bx, s16 by, s16 bw, s16 bh)
@@ -1354,7 +1520,6 @@ static bool eatPerson(AttackBox attack)
     {
         Person *p = &people[i];
         if (!p->active) continue;
-        if (!p->edible) continue;
 
         const s16 eatX = p->x + PERSON_EAT_X;
         const s16 eatY = p->y + PERSON_EAT_Y;
@@ -1443,7 +1608,9 @@ static void applyBuildingDamage(Building *b, u8 hitX, u8 hitY)
 {
     const u8 mark = b->damage < MAX_DAMAGE_MARKS ? b->damage : MAX_DAMAGE_MARKS - 1;
 
-    if (b->damage < b->h - 2)
+    if (b->cracking || b->collapsing) return;
+
+    if (b->damage < b->h + 2)
     {
         b->damageX[mark] = hitX;
         b->damageY[mark] = hitY;
@@ -1454,9 +1621,11 @@ static void applyBuildingDamage(Building *b, u8 hitX, u8 hitY)
     }
     else
     {
-        b->alive = FALSE;
+        b->cracking = TRUE;
+        b->crackTimer = BUILDING_CRACK_STEP_FRAMES;
+        b->crackRows = 1;
         score += 100;
-        playTone(32, 14);
+        playTone(54, 14);
     }
     drawBuildings();
     drawHud();
@@ -1472,6 +1641,8 @@ static bool damageBuildingAtAttack(AttackBox attack)
         const s16 bw = b->w * 8;
         const s16 bh = b->h * 8;
         if (!b->alive) continue;
+        if (b->cracking) continue;
+        if (b->collapsing) continue;
         if (!rectsOverlap(attack.x, attack.y, attack.w, attack.h, bx, by, bw, bh)) continue;
 
         const s16 rawY = (attack.y + (attack.h / 2)) / 8;
@@ -1491,6 +1662,8 @@ static void damageBuildings(ClimbContact contact, AttackBox attack)
 
     Building *b = &buildings[contact.building];
     if (!b->alive) return;
+    if (b->cracking) return;
+    if (b->collapsing) return;
     if ((player.y / 8) + 4 >= b->y)
     {
         const s16 rawY = (attack.y + (attack.h / 2)) / 8;
@@ -1504,9 +1677,70 @@ static bool cityCleared(void)
 {
     for (u8 i = 0; i < MAX_BUILDINGS; i++)
     {
-        if (buildings[i].alive) return FALSE;
+        if (buildings[i].alive || buildings[i].cracking || buildings[i].collapsing) return FALSE;
     }
     return TRUE;
+}
+
+static void updateBuildingCollapse(void)
+{
+    bool redraw = FALSE;
+
+    for (u8 i = 0; i < MAX_BUILDINGS; i++)
+    {
+        Building *b = &buildings[i];
+        if (b->cracking)
+        {
+            if (b->crackTimer > 0) b->crackTimer--;
+            if (b->crackTimer != 0) continue;
+
+            b->crackTimer = BUILDING_CRACK_STEP_FRAMES;
+            if (b->crackRows < b->h)
+            {
+                b->crackRows++;
+                playTone(62 + b->crackRows, 3);
+            }
+            else
+            {
+                const ClimbContact contact = getClimbContact();
+                if (contact.active && contact.building == i && !player.grounded)
+                {
+                    incapacitatePlayer();
+                }
+
+                b->cracking = FALSE;
+                b->collapsing = TRUE;
+                b->collapseTimer = BUILDING_COLLAPSE_STEP_FRAMES;
+                b->collapseRows = 1;
+                releaseWindowPeopleAbove(b, b->y + 1);
+                playTone(32, 14);
+            }
+            redraw = TRUE;
+            continue;
+        }
+
+        if (!b->collapsing) continue;
+
+        if (b->collapseTimer > 0) b->collapseTimer--;
+        if (b->collapseTimer != 0) continue;
+
+        b->collapseTimer = BUILDING_COLLAPSE_STEP_FRAMES;
+        if (b->collapseRows < b->h)
+        {
+            b->collapseRows++;
+            releaseWindowPeopleAbove(b, b->y + b->collapseRows);
+            playTone(42 + (b->collapseRows * 2), 3);
+        }
+        else
+        {
+            b->collapsing = FALSE;
+            b->alive = FALSE;
+            b->collapseRows = b->h;
+        }
+        redraw = TRUE;
+    }
+
+    if (redraw) drawBuildings();
 }
 
 static RoofContact getRoofContact(void)
@@ -1526,6 +1760,7 @@ static RoofContact getRoofContact(void)
         const s16 bRight = (b->x + b->w) * 8;
         const s16 bTop = b->y * 8;
         if (!b->alive) continue;
+        if (b->collapsing) continue;
         if (center < bLeft + 4 || center > bRight - 4) continue;
         if (feet < bTop - 6 || feet > bTop + 8) continue;
 
@@ -1558,6 +1793,7 @@ static ClimbContact getClimbContact(void)
         const s16 bTop = b->y * 8;
         const s16 bBottom = FLOOR_Y * 8;
         if (!b->alive) continue;
+        if (b->collapsing) continue;
 
         if (feet < bTop - 6 || top > bBottom) continue;
 
@@ -1593,6 +1829,21 @@ static void updatePlayer(u16 joy, u16 pressed)
     bool moved = FALSE;
     bool bounce = FALSE;
     const bool bouncing = (joy & BUTTON_A) && !player.grounded;
+
+    if (player.stunTimer > 0)
+    {
+        player.stunTimer--;
+        player.x += player.dir > 0 ? -1 : 1;
+        player.y = PLAYER_GROUND_Y;
+        player.vy = 0;
+        player.punching = FALSE;
+        player.walking = FALSE;
+        player.grounded = TRUE;
+        if (player.landTimer > 0) player.landTimer--;
+        if (player.x < 0) player.x = 0;
+        if (player.x > 280) player.x = 280;
+        return;
+    }
 
     if (joy & BUTTON_LEFT)
     {
@@ -1665,6 +1916,7 @@ static void updatePlayer(u16 joy, u16 pressed)
         player.gravityTimer = 0;
         player.landTimer = 0;
         player.grounded = FALSE;
+        onRoof = FALSE;
         playTone(210, 5);
     }
     if ((pressed & (BUTTON_B | BUTTON_C)) != 0)
@@ -1799,21 +2051,23 @@ static void handleState(u16 joy)
             break;
 
         case STATE_SELECT:
+            drawSelectOverlay();
             if (pressed & BUTTON_LEFT)
             {
                 selectedMonster = (selectedMonster + MAX_MONSTERS - 1) % MAX_MONSTERS;
-                drawSelect();
+                drawSelectOverlay();
                 playTone(180, 4);
             }
             if (pressed & BUTTON_RIGHT)
             {
                 selectedMonster = (selectedMonster + 1) % MAX_MONSTERS;
-                drawSelect();
+                drawSelectOverlay();
                 playTone(160, 4);
             }
             if (pressed & BUTTON_START)
             {
                 state = STATE_INTRO;
+                loadGameVideo();
                 drawIntro();
                 playTone(100, 10);
             }
@@ -1830,8 +2084,10 @@ static void handleState(u16 joy)
         case STATE_PLAY:
             updatePlayer(joy, pressed);
             updateThreats();
+            updateBuildingCollapse();
             if (state == STATE_GAME_OVER)
             {
+                resetSpriteEngineState();
                 drawGameOver();
                 break;
             }
@@ -1871,11 +2127,7 @@ int main(bool hardReset)
     SYS_disableInts();
     VDP_setScreenWidth320();
     VDP_setPlaneSize(64, 32, TRUE);
-    PAL_setPalette(PAL0, palette0, DMA);
-    PAL_setPalette(PAL1, paletteApe, DMA);
-    PAL_setPalette(PAL2, paletteWolf, DMA);
-    PAL_setPalette(PAL3, paletteLizard, DMA);
-    loadTiles();
+    loadGameVideo();
     SPR_init();
     PSG_reset();
     SYS_enableInts();
