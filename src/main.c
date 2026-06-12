@@ -16,6 +16,7 @@
 #define PLAYER_W 48
 #define PLAYER_H 56
 #define PLAYER_GROUND_Y ((FLOOR_Y - 7) * 8)
+#define PLAYER_SPRITE_FRAMES 6
 
 #define TILE_SKY     (TILE_USER_INDEX + 0)
 #define TILE_DARK    (TILE_USER_INDEX + 1)
@@ -59,6 +60,7 @@ typedef struct
     u8 monster;
     u8 punching;
     u8 punchTimer;
+    u8 attackPose;
     bool grounded;
 } Player;
 
@@ -104,6 +106,7 @@ typedef struct
     s16 h;
     s8 xDir;
     s8 yDir;
+    u8 pose;
 } AttackBox;
 
 typedef struct
@@ -582,11 +585,11 @@ static void showPlayerSprite(void)
 static void updatePlayerSprite(void)
 {
     const u8 pal = monsters[player.monster].pal;
-    u8 frame = player.monster * 3;
+    u8 frame = player.monster * PLAYER_SPRITE_FRAMES;
 
     showPlayerSprite();
     SPR_setPalette(playerSprite, pal);
-    if (player.punching) frame += 2;
+    if (player.punching) frame += player.attackPose;
     else if (!player.grounded && getClimbContact().active) frame += 1;
     SPR_setFrame(playerSprite, frame);
     SPR_setHFlip(playerSprite, player.dir < 0);
@@ -699,6 +702,7 @@ static void startCity(void)
     player.monster = selectedMonster;
     player.punching = FALSE;
     player.punchTimer = 0;
+    player.attackPose = 2;
     player.grounded = TRUE;
     playerHealth = PLAYER_MAX_HEALTH;
     invulnerableTimer = 0;
@@ -791,6 +795,7 @@ static AttackBox getAttackBox(u16 joy)
 
     box.xDir = xDir;
     box.yDir = up ? -1 : (down ? 1 : 0);
+    box.pose = 2;
 
     if (up && ((joy & (BUTTON_LEFT | BUTTON_RIGHT)) == 0))
     {
@@ -798,6 +803,7 @@ static AttackBox getAttackBox(u16 joy)
         box.y = player.y - 10;
         box.w = 28;
         box.h = 26;
+        box.pose = 3;
         return box;
     }
 
@@ -805,8 +811,16 @@ static AttackBox getAttackBox(u16 joy)
     box.w = 28;
     box.h = 18;
 
-    if (up) box.y = player.y + 4;
-    else if (down) box.y = player.y + 34;
+    if (up)
+    {
+        box.y = player.y + 4;
+        box.pose = 4;
+    }
+    else if (down)
+    {
+        box.y = player.y + 34;
+        box.pose = 5;
+    }
     else box.y = player.y + 20;
 
     return box;
@@ -1081,6 +1095,7 @@ static void updatePlayer(u16 joy, u16 pressed)
         const AttackBox attack = getAttackBox(joy);
         player.punching = TRUE;
         player.punchTimer = 10;
+        player.attackPose = attack.pose;
         if (!eatPerson(attack) && !attackEnemies(attack) && (onFacade || climbing)) damageBuildings(climbContact, attack);
     }
 
