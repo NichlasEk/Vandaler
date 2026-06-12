@@ -1,5 +1,6 @@
 rampage.sms
 src/rom_header.c
+res/resources.h
 out/
 *.bin
 *.out

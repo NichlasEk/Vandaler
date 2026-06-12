@@ -78,7 +78,7 @@ wine "$sgdk_bin/gcc.exe" "${converted[@]}"
 status=$?
 
 if [[ $status -eq 0 && -n "$dep_file" && -f "$dep_file" ]]; then
-    sed -i 's#Z:\\#/#g; s#\\#/#g' "$dep_file"
+    perl -0pi -e 's#Z:\\#/#g; s#\\([^\r\n])#/$1#g; s#\r##g' "$dep_file"
 fi
 
 exit "$status"

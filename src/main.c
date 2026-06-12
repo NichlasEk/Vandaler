@@ -1,11 +1,18 @@
 #include <genesis.h>
 #include <psg.h>
+#include "resources.h"
 
 #define SCREEN_TILES_W 40
 #define SCREEN_TILES_H 28
 #define FLOOR_Y 23
 #define MAX_BUILDINGS 5
 #define MAX_MONSTERS 3
+#define MAX_ENEMIES 3
+#define MAX_SHOTS 4
+#define PLAYER_MAX_HEALTH 8
+#define PLAYER_W 48
+#define PLAYER_H 56
+#define PLAYER_GROUND_Y ((FLOOR_Y - 7) * 8)
 
 #define TILE_SKY     (TILE_USER_INDEX + 0)
 #define TILE_DARK    (TILE_USER_INDEX + 1)
@@ -28,7 +35,8 @@ typedef enum
     STATE_SELECT,
     STATE_INTRO,
     STATE_PLAY,
-    STATE_CLEAR
+    STATE_CLEAR,
+    STATE_GAME_OVER
 } GameState;
 
 typedef struct
@@ -62,6 +70,31 @@ typedef struct
     bool alive;
 } Building;
 
+typedef struct
+{
+    s16 x;
+    s16 y;
+    s16 speed;
+    u8 cooldown;
+    bool active;
+} Enemy;
+
+typedef struct
+{
+    s16 x;
+    s16 y;
+    s16 speed;
+    bool active;
+} Shot;
+
+typedef struct
+{
+    bool active;
+    s16 snapX;
+    s8 attackDir;
+    u8 building;
+} ClimbContact;
+
 static const u32 tileSky[8]     = {0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111};
 static const u32 tileDark[8]    = {0x22222222,0x22222222,0x22222222,0x22222222,0x22222222,0x22222222,0x22222222,0x22222222};
 static const u32 tileRoad[8]    = {0x33333333,0x33333333,0x33333333,0x33333333,0x33333333,0x33333333,0x33333333,0x33333333};
@@ -90,11 +123,11 @@ static const u16 palette0[16] =
     RGB3_3_3_TO_VDPCOLOR(7,1,0),
     RGB3_3_3_TO_VDPCOLOR(7,7,7),
     RGB3_3_3_TO_VDPCOLOR(3,2,0),
+    RGB3_3_3_TO_VDPCOLOR(1,1,2),
+    RGB3_3_3_TO_VDPCOLOR(0,0,4),
+    RGB3_3_3_TO_VDPCOLOR(7,7,0),
     RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(0,0,0)
+    RGB3_3_3_TO_VDPCOLOR(7,7,7)
 };
 
 static const u16 paletteApe[16] =
@@ -128,16 +161,35 @@ static const MonsterDef monsters[MAX_MONSTERS] =
     {"BETTAN", "ODLA", PAL3, PAL0}
 };
 
-static const char *cities[] = {"ÖREBRO", "STOCKHOLM", "GÖTEBORG", "MALMÖ", "KIRUNA"};
+static const char *cities[] =
+{
+    "MALMÖ",
+    "LINKÖPING",
+    "ÖREBRO",
+    "VÄSTERÅS",
+    "STOCKHOLM",
+    "UPPSALA",
+    "GÄVLE",
+    "SUNDSVALL",
+    "UMEÅ",
+    "LULEÅ"
+};
 
 static GameState state = STATE_TITLE;
 static Player player;
+static Sprite *playerSprite = NULL;
 static Building buildings[MAX_BUILDINGS];
+static Enemy enemies[MAX_ENEMIES];
+static Shot shots[MAX_SHOTS];
 static u8 selectedMonster = 0;
 static u8 currentCity = 0;
+static u8 playerHealth = PLAYER_MAX_HEALTH;
+static u8 invulnerableTimer = 0;
 static u16 frame = 0;
 static u16 score = 0;
 static u16 previousJoy = 0;
+
+static ClimbContact getClimbContact(void);
 
 static u16 attr(u8 pal, u16 tile)
 {
@@ -233,6 +285,15 @@ static void clearAll(void)
     VDP_clearPlane(BG_B, TRUE);
 }
 
+static void drawPanel(u8 x, u8 y, u8 w, u8 h)
+{
+    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_DARK), x, y, w, h);
+    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), x, y, w, 1);
+    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), x, y + h - 1, w, 1);
+    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), x, y, 1, h);
+    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), x + w - 1, y, 1, h);
+}
+
 static void drawSkyline(void)
 {
     const u8 heights[9] = {7, 11, 8, 13, 10, 12, 9, 14, 8};
@@ -262,12 +323,18 @@ static void drawSkyline(void)
 
 static void drawRoad(void)
 {
-    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_ROAD), 0, FLOOR_Y + 1, SCREEN_TILES_W, 3);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROAD), 0, FLOOR_Y + 1, SCREEN_TILES_W, 3);
     for (u8 x = 1; x < SCREEN_TILES_W; x += 6)
     {
-        VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_LINE), x, FLOOR_Y + 2, 3, 1);
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_LINE), x, FLOOR_Y + 2, 3, 1);
     }
-    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), 0, FLOOR_Y, SCREEN_TILES_W, 1);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WHITE), 0, FLOOR_Y, SCREEN_TILES_W, 1);
+}
+
+static void resetThreats(void)
+{
+    for (u8 i = 0; i < MAX_ENEMIES; i++) enemies[i].active = FALSE;
+    for (u8 i = 0; i < MAX_SHOTS; i++) shots[i].active = FALSE;
 }
 
 static void initBuildings(void)
@@ -292,26 +359,26 @@ static void drawBuilding(const Building *b)
 {
     if (!b->alive) return;
 
-    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_YELLOW), b->x, b->y, b->w, b->h);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_YELLOW), b->x, b->y, b->w, b->h);
     for (u8 yy = 1; yy < b->h; yy += 2)
     {
         for (u8 xx = 1; xx + 1 < b->w; xx += 2)
         {
             const bool broken = ((xx + yy + b->damage) & 3) == 0;
-            VDP_setTileMapXY(BG_A, attr(PAL0, broken ? TILE_WIN_OFF : TILE_WIN_ON), b->x + xx, b->y + yy);
+            VDP_setTileMapXY(BG_B, attr(PAL0, broken ? TILE_WIN_OFF : TILE_WIN_ON), b->x + xx, b->y + yy);
         }
     }
     for (u8 d = 0; d < b->damage; d++)
     {
         const u8 cx = b->x + 1 + ((d * 2) % (b->w - 1));
         const u8 cy = b->y + 1 + d;
-        if (cy < FLOOR_Y) VDP_setTileMapXY(BG_A, attr(PAL0, TILE_CRACK), cx, cy);
+        if (cy < FLOOR_Y) VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CRACK), cx, cy);
     }
 }
 
 static void drawBuildings(void)
 {
-    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_SKY), 0, 0, SCREEN_TILES_W, FLOOR_Y);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_SKY), 0, 0, SCREEN_TILES_W, FLOOR_Y);
     for (u8 i = 0; i < MAX_BUILDINGS; i++) drawBuilding(&buildings[i]);
     drawRoad();
 }
@@ -319,30 +386,44 @@ static void drawBuildings(void)
 static void drawHud(void)
 {
     char buf[24];
-    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_SKY), 0, 0, SCREEN_TILES_W, 2);
+    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_DARK), 0, 0, SCREEN_TILES_W, 3);
     VDP_setTextPalette(PAL0);
-    VDP_drawText("1P", 1, 0);
+    VDP_drawText("P1", 1, 1);
     intToStr(score, buf, 1);
-    VDP_drawText(buf, 7, 0);
-    drawTextSv(cities[currentCity], 22, 0);
+    VDP_drawText("SCORE", 4, 1);
+    VDP_drawText(buf, 10, 1);
+    VDP_drawText("LIV", 17, 1);
+    for (u8 i = 0; i < PLAYER_MAX_HEALTH; i++)
+    {
+        VDP_setTileMapXY(BG_A, attr(PAL0, i < playerHealth ? TILE_RED : TILE_ROAD), 21 + i, 1);
+    }
+    drawTextSv(cities[currentCity], 30, 1);
 }
 
 static void drawMonsterBody(s16 tx, s16 ty, u8 monster, bool big, bool punch)
 {
+    // Temporary tilemap monster: keep dimensions fixed so climb/punch never changes silhouette.
     const u8 pal = monsters[monster].pal;
-    const u16 body = attr(pal, TILE_YELLOW);
-    const u16 dark = attr(pal, TILE_DARK);
-    const u16 eye = attr(pal, TILE_RED);
-    const u8 h = big ? 6 : 4;
-    const u8 w = big ? 5 : 4;
+    const u16 body = attr(pal, TILE_ROAD);
+    const u16 shade = attr(pal, TILE_DARK);
+    const u16 outline = attr(PAL0, TILE_DARK);
+    const u16 eye = attr(PAL0, TILE_RED);
+    const u8 h = 7;
+    const u8 w = 6;
 
-    VDP_fillTileMapRect(BG_A, body, tx + 1, ty + 1, w - 2, h - 1);
-    VDP_fillTileMapRect(BG_A, body, tx, ty + 2, 1, h - 2);
-    VDP_fillTileMapRect(BG_A, body, tx + w - 1, ty + 2, 1, h - 2);
-    VDP_fillTileMapRect(BG_A, dark, tx + 1, ty, w - 2, 1);
-    VDP_setTileMapXY(BG_A, eye, tx + 1, ty + 1);
-    VDP_setTileMapXY(BG_A, eye, tx + w - 2, ty + 1);
-    VDP_fillTileMapRect(BG_A, attr(pal, TILE_WHITE), tx + 1, ty + h - 1, w - 2, 1);
+    if (tx < 0) tx = 0;
+    if (ty < 0) ty = 0;
+    if (tx > SCREEN_TILES_W - w - 2) tx = SCREEN_TILES_W - w - 2;
+    if (ty > SCREEN_TILES_H - h) ty = SCREEN_TILES_H - h;
+
+    VDP_fillTileMapRect(BG_A, outline, tx, ty, w, h);
+    VDP_fillTileMapRect(BG_A, body, tx + 1, ty + 1, w - 2, h - 2);
+    VDP_fillTileMapRect(BG_A, body, tx, ty + 2, 1, h - 4);
+    VDP_fillTileMapRect(BG_A, body, tx + w - 1, ty + 2, 1, h - 4);
+    VDP_fillTileMapRect(BG_A, shade, tx + 1, ty + 1, w - 2, 1);
+    VDP_setTileMapXY(BG_A, eye, tx + 1, ty + 2);
+    VDP_setTileMapXY(BG_A, eye, tx + w - 2, ty + 2);
+    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), tx + 2, ty + h - 2, w - 4, 1);
 
     if (monster == 1)
     {
@@ -351,17 +432,52 @@ static void drawMonsterBody(s16 tx, s16 ty, u8 monster, bool big, bool punch)
     }
     else if (monster == 2)
     {
-        VDP_fillTileMapRect(BG_A, attr(pal, TILE_GREEN), tx + w, ty + 2, 1, 3);
+        VDP_fillTileMapRect(BG_A, body, tx + w, ty + 2, 1, 3);
     }
 
     if (punch)
     {
-        VDP_fillTileMapRect(BG_A, attr(pal, TILE_WHITE), tx + w, ty + 3, 2, 1);
+        const s16 armX = tx + (player.dir > 0 ? w : -2);
+        if (armX >= 0 && armX < SCREEN_TILES_W - 1)
+        {
+            VDP_fillTileMapRect(BG_A, body, armX, ty + 3, 2, 1);
+            VDP_setTileMapXY(BG_A, attr(PAL0, TILE_WHITE), armX + (player.dir > 0 ? 1 : 0), ty + 3);
+        }
     }
+}
+
+static void hidePlayerSprite(void)
+{
+    if (playerSprite != NULL) SPR_setVisibility(playerSprite, HIDDEN);
+}
+
+static void showPlayerSprite(void)
+{
+    if (playerSprite == NULL)
+    {
+        playerSprite = SPR_addSprite(&monster_sprite, player.x, player.y, TILE_ATTR(PAL1, TRUE, FALSE, FALSE));
+    }
+
+    SPR_setVisibility(playerSprite, VISIBLE);
+}
+
+static void updatePlayerSprite(void)
+{
+    const u8 pal = monsters[player.monster].pal;
+    u8 frame = player.monster * 3;
+
+    showPlayerSprite();
+    SPR_setPalette(playerSprite, pal);
+    if (player.punching) frame += 2;
+    else if (!player.grounded && getClimbContact().active) frame += 1;
+    SPR_setFrame(playerSprite, frame);
+    SPR_setHFlip(playerSprite, player.dir < 0);
+    SPR_setPosition(playerSprite, player.x, player.y);
 }
 
 static void drawTitle(void)
 {
+    hidePlayerSprite();
     clearAll();
     VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_SKY), 0, 0, SCREEN_TILES_W, SCREEN_TILES_H);
     drawSkyline();
@@ -377,6 +493,7 @@ static void drawTitle(void)
 
 static void drawSelect(void)
 {
+    hidePlayerSprite();
     clearAll();
     VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), 0, 0, SCREEN_TILES_W, SCREEN_TILES_H);
     VDP_setTextPalette(PAL0);
@@ -398,9 +515,10 @@ static void drawSelect(void)
 
 static void drawIntro(void)
 {
+    hidePlayerSprite();
     clearAll();
     drawSkyline();
-    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_DARK), 8, 10, 24, 3);
+    drawPanel(8, 9, 24, 5);
     VDP_setTextPalette(PAL0);
     drawTextSv(cities[currentCity], 15, 11);
 }
@@ -408,47 +526,189 @@ static void drawIntro(void)
 static void startCity(void)
 {
     initBuildings();
+    resetThreats();
     player.x = 16;
-    player.y = (FLOOR_Y - 6) * 8;
+    player.y = PLAYER_GROUND_Y;
     player.vy = 0;
     player.dir = 1;
     player.monster = selectedMonster;
     player.punching = FALSE;
     player.punchTimer = 0;
     player.grounded = TRUE;
+    playerHealth = PLAYER_MAX_HEALTH;
+    invulnerableTimer = 0;
     clearAll();
     drawSkyline();
     drawBuildings();
+    VDP_fillTileMapRect(BG_A, 0, 0, 0, SCREEN_TILES_W, SCREEN_TILES_H);
     drawHud();
+    updatePlayerSprite();
 }
 
-static void damageBuildings(void)
+static void spawnEnemy(void)
 {
-    const s16 px = player.x / 8;
-    const s16 reach = px + (player.dir > 0 ? 5 : -1);
-
-    for (u8 i = 0; i < MAX_BUILDINGS; i++)
+    for (u8 i = 0; i < MAX_ENEMIES; i++)
     {
-        Building *b = &buildings[i];
-        if (!b->alive) continue;
-        if (reach >= b->x && reach < b->x + b->w && (player.y / 8) + 3 >= b->y)
+        if (!enemies[i].active)
         {
-            if (b->damage < b->h - 2)
-            {
-                b->damage++;
-                score += 10;
-                playTone(80 + (b->damage * 4), 9);
-            }
-            else
-            {
-                b->alive = FALSE;
-                score += 100;
-                playTone(32, 14);
-            }
-            drawBuildings();
-            drawHud();
+            const bool fromRight = ((frame >> 6) & 1) != 0;
+            enemies[i].x = fromRight ? 320 : -24;
+            enemies[i].y = (FLOOR_Y - 1) * 8;
+            enemies[i].speed = fromRight ? -1 : 1;
+            enemies[i].cooldown = 35 + (i * 10);
+            enemies[i].active = TRUE;
             return;
         }
+    }
+}
+
+static void spawnShot(s16 x, s16 y, s16 speed)
+{
+    for (u8 i = 0; i < MAX_SHOTS; i++)
+    {
+        if (!shots[i].active)
+        {
+            shots[i].x = x;
+            shots[i].y = y;
+            shots[i].speed = speed;
+            shots[i].active = TRUE;
+            playTone(280, 4);
+            return;
+        }
+    }
+}
+
+static void hitPlayer(void)
+{
+    if (invulnerableTimer != 0) return;
+
+    if (playerHealth > 0) playerHealth--;
+    invulnerableTimer = 55;
+    playTone(55, 12);
+
+    if (playerHealth == 0)
+    {
+        state = STATE_GAME_OVER;
+    }
+}
+
+static bool rectsOverlap(s16 ax, s16 ay, s16 aw, s16 ah, s16 bx, s16 by, s16 bw, s16 bh)
+{
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+}
+
+static void updateThreats(void)
+{
+    if ((frame & 127) == 0) spawnEnemy();
+
+    for (u8 i = 0; i < MAX_ENEMIES; i++)
+    {
+        Enemy *e = &enemies[i];
+        if (!e->active) continue;
+
+        e->x += e->speed;
+        if (e->x < -40 || e->x > 340)
+        {
+            e->active = FALSE;
+            continue;
+        }
+
+        if (e->cooldown > 0) e->cooldown--;
+        if (e->cooldown == 0)
+        {
+            const s16 shotSpeed = (player.x < e->x) ? -3 : 3;
+            spawnShot(e->x + 8, e->y - 18, shotSpeed);
+            e->cooldown = 80;
+        }
+
+        if (rectsOverlap(player.x, player.y, 40, 48, e->x, e->y, 24, 12))
+        {
+            hitPlayer();
+            e->active = FALSE;
+        }
+    }
+
+    for (u8 i = 0; i < MAX_SHOTS; i++)
+    {
+        Shot *s = &shots[i];
+        if (!s->active) continue;
+
+        s->x += s->speed;
+        if (s->x < -8 || s->x > 328)
+        {
+            s->active = FALSE;
+            continue;
+        }
+
+        if (rectsOverlap(player.x, player.y, 40, 48, s->x, s->y, 8, 8))
+        {
+            hitPlayer();
+            s->active = FALSE;
+        }
+    }
+
+    if (invulnerableTimer > 0) invulnerableTimer--;
+}
+
+static bool attackEnemies(void)
+{
+    const s16 ax = player.x + (player.dir > 0 ? 32 : -16);
+    const s16 ay = player.y + 20;
+
+    for (u8 i = 0; i < MAX_ENEMIES; i++)
+    {
+        Enemy *e = &enemies[i];
+        if (!e->active) continue;
+
+        if (rectsOverlap(ax, ay, 24, 16, e->x, e->y - 8, 24, 20))
+        {
+            e->active = FALSE;
+            score += 50;
+            playTone(42, 12);
+            return TRUE;
+        }
+    }
+
+    for (u8 i = 0; i < MAX_SHOTS; i++)
+    {
+        Shot *s = &shots[i];
+        if (!s->active) continue;
+
+        if (rectsOverlap(ax, ay, 24, 16, s->x, s->y, 8, 8))
+        {
+            s->active = FALSE;
+            score += 5;
+            playTone(120, 5);
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static void damageBuildings(ClimbContact contact)
+{
+    if (!contact.active) return;
+    if (contact.building >= MAX_BUILDINGS) return;
+
+    Building *b = &buildings[contact.building];
+    if (!b->alive) return;
+    if ((player.y / 8) + 4 >= b->y)
+    {
+        if (b->damage < b->h - 2)
+        {
+            b->damage++;
+            score += 10;
+            playTone(80 + (b->damage * 4), 9);
+        }
+        else
+        {
+            b->alive = FALSE;
+            score += 100;
+            playTone(32, 14);
+        }
+        drawBuildings();
+        drawHud();
     }
 }
 
@@ -461,8 +721,56 @@ static bool cityCleared(void)
     return TRUE;
 }
 
+static ClimbContact getClimbContact(void)
+{
+    ClimbContact contact;
+    const s16 left = player.x;
+    const s16 right = player.x + PLAYER_W;
+    const s16 top = player.y;
+    const s16 feet = player.y + PLAYER_H;
+    contact.active = FALSE;
+    contact.snapX = player.x;
+    contact.attackDir = player.dir;
+    contact.building = MAX_BUILDINGS;
+
+    for (u8 i = 0; i < MAX_BUILDINGS; i++)
+    {
+        const Building *b = &buildings[i];
+        const s16 bLeft = b->x * 8;
+        const s16 bRight = (b->x + b->w) * 8;
+        const s16 bTop = b->y * 8;
+        const s16 bBottom = FLOOR_Y * 8;
+        if (!b->alive) continue;
+
+        if (feet < bTop + 12 || top > bBottom) continue;
+
+        if (right >= bLeft - 6 && right <= bLeft + 10)
+        {
+            contact.active = TRUE;
+            contact.snapX = bLeft - PLAYER_W + 4;
+            contact.attackDir = 1;
+            contact.building = i;
+            return contact;
+        }
+
+        if (left <= bRight + 6 && left >= bRight - 10)
+        {
+            contact.active = TRUE;
+            contact.snapX = bRight - 4;
+            contact.attackDir = -1;
+            contact.building = i;
+            return contact;
+        }
+    }
+
+    return contact;
+}
+
 static void updatePlayer(u16 joy, u16 pressed)
 {
+    const ClimbContact climbContact = getClimbContact();
+    const bool climbing = (joy & BUTTON_UP) && climbContact.active;
+
     if (joy & BUTTON_LEFT)
     {
         player.x -= 2;
@@ -473,9 +781,13 @@ static void updatePlayer(u16 joy, u16 pressed)
         player.x += 2;
         player.dir = 1;
     }
-    if ((joy & BUTTON_UP) && player.y > 40)
+    if (climbing && player.y > 40)
     {
-        player.y -= 1;
+        player.x = climbContact.snapX;
+        player.dir = climbContact.attackDir;
+        player.y -= 2;
+        player.vy = 0;
+        player.grounded = FALSE;
     }
     if ((pressed & BUTTON_A) && player.grounded)
     {
@@ -487,19 +799,24 @@ static void updatePlayer(u16 joy, u16 pressed)
     {
         player.punching = TRUE;
         player.punchTimer = 10;
-        damageBuildings();
+        if (!attackEnemies() && climbing) damageBuildings(climbContact);
     }
 
-    if (!player.grounded)
+    if (!player.grounded && !climbing)
     {
         player.y += player.vy;
         player.vy++;
-        if (player.y >= (FLOOR_Y - 6) * 8)
+        if (player.y >= PLAYER_GROUND_Y)
         {
-            player.y = (FLOOR_Y - 6) * 8;
+            player.y = PLAYER_GROUND_Y;
             player.vy = 0;
             player.grounded = TRUE;
         }
+    }
+    else if (!climbing && player.y < PLAYER_GROUND_Y && !getClimbContact().active)
+    {
+        player.grounded = FALSE;
+        player.vy = 2;
     }
 
     if (player.x < 0) player.x = 0;
@@ -514,19 +831,50 @@ static void updatePlayer(u16 joy, u16 pressed)
 
 static void redrawPlayFrame(void)
 {
-    drawBuildings();
+    VDP_fillTileMapRect(BG_A, 0, 0, 3, SCREEN_TILES_W, SCREEN_TILES_H - 3);
     drawHud();
-    drawMonsterBody(player.x / 8, player.y / 8, player.monster, TRUE, player.punching);
+
+    for (u8 i = 0; i < MAX_ENEMIES; i++)
+    {
+        const Enemy *e = &enemies[i];
+        if (!e->active) continue;
+        VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_RED), e->x / 8, e->y / 8, 3, 1);
+        VDP_setTileMapXY(BG_A, attr(PAL0, TILE_WHITE), (e->x / 8) + 1, (e->y / 8) - 1);
+        VDP_setTileMapXY(BG_A, attr(PAL0, TILE_DARK), (e->x / 8), (e->y / 8) + 1);
+        VDP_setTileMapXY(BG_A, attr(PAL0, TILE_DARK), (e->x / 8) + 2, (e->y / 8) + 1);
+    }
+
+    for (u8 i = 0; i < MAX_SHOTS; i++)
+    {
+        const Shot *s = &shots[i];
+        if (s->active) VDP_setTileMapXY(BG_A, attr(PAL0, TILE_WHITE), s->x / 8, s->y / 8);
+    }
+
+    updatePlayerSprite();
+    SPR_setVisibility(playerSprite, ((invulnerableTimer & 4) == 0) ? VISIBLE : HIDDEN);
 }
 
 static void drawClear(void)
 {
+    hidePlayerSprite();
     clearAll();
     drawSkyline();
-    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_DARK), 6, 9, 28, 6);
+    drawPanel(6, 8, 28, 8);
     VDP_setTextPalette(PAL0);
     drawTextSv("STADEN ÄR RIVEN", 12, 10);
     drawTextSv("START FÖR NÄSTA", 12, 12);
+}
+
+static void drawGameOver(void)
+{
+    hidePlayerSprite();
+    clearAll();
+    drawSkyline();
+    drawPanel(8, 8, 24, 8);
+    VDP_setTextPalette(PAL0);
+    VDP_drawText("GAME OVER", 15, 10);
+    drawTextSv("POLISEN TOG DIG", 12, 12);
+    VDP_drawText("START", 17, 14);
 }
 
 static void handleState(u16 joy)
@@ -575,6 +923,12 @@ static void handleState(u16 joy)
 
         case STATE_PLAY:
             updatePlayer(joy, pressed);
+            updateThreats();
+            if (state == STATE_GAME_OVER)
+            {
+                drawGameOver();
+                break;
+            }
             redrawPlayFrame();
             if (cityCleared())
             {
@@ -589,6 +943,16 @@ static void handleState(u16 joy)
                 currentCity = (currentCity + 1) % (sizeof(cities) / sizeof(cities[0]));
                 state = STATE_INTRO;
                 drawIntro();
+            }
+            break;
+
+        case STATE_GAME_OVER:
+            if (pressed & BUTTON_START)
+            {
+                score = 0;
+                currentCity = 0;
+                state = STATE_TITLE;
+                drawTitle();
             }
             break;
     }
@@ -606,6 +970,7 @@ int main(bool hardReset)
     PAL_setPalette(PAL2, paletteWolf, DMA);
     PAL_setPalette(PAL3, paletteLizard, DMA);
     loadTiles();
+    SPR_init();
     PSG_reset();
     SYS_enableInts();
 
@@ -618,6 +983,7 @@ int main(bool hardReset)
 
         if ((frame & 7) == 0) stopTone();
         frame++;
+        SPR_update();
         SYS_doVBlankProcess();
     }
 
