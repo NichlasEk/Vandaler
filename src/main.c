@@ -91,6 +91,21 @@
 #define TILE_A_RING      (TILE_USER_INDEX + 17)
 #define TILE_A_UML       (TILE_USER_INDEX + 18)
 #define TILE_O_UML       (TILE_USER_INDEX + 19)
+#define TILE_SKY_TOP     (TILE_USER_INDEX + 20)
+#define TILE_SKY_MID     (TILE_USER_INDEX + 21)
+#define TILE_SKY_LOW     (TILE_USER_INDEX + 22)
+#define TILE_CLOUD       (TILE_USER_INDEX + 23)
+#define TILE_FAR_TOWER   (TILE_USER_INDEX + 24)
+#define TILE_FAR_LIT     (TILE_USER_INDEX + 25)
+#define TILE_FACADE_GREY (TILE_USER_INDEX + 26)
+#define TILE_FACADE_BRICK (TILE_USER_INDEX + 27)
+#define TILE_FACADE_DARK (TILE_USER_INDEX + 28)
+#define TILE_ROOF        (TILE_USER_INDEX + 29)
+#define TILE_DOOR        (TILE_USER_INDEX + 30)
+#define TILE_SIDEWALK    (TILE_USER_INDEX + 31)
+#define TILE_CURB        (TILE_USER_INDEX + 32)
+#define TILE_ROAD_DARK   (TILE_USER_INDEX + 33)
+#define TILE_STREET_LAMP (TILE_USER_INDEX + 34)
 
 typedef enum
 {
@@ -264,23 +279,38 @@ static const u32 tileYellow[8]  = {0xDDDDDDDD,0xD77777DD,0xD77777DD,0xD7777DDD,0
 static const u32 tileARing[8]   = {0x000FF000,0x00F00F00,0x000FF000,0x00F00F00,0x0F0000F0,0x0FFFFFF0,0x0F0000F0,0x0F0000F0};
 static const u32 tileAUml[8]    = {0x00F00F00,0x00000000,0x00F00F00,0x0F0000F0,0x0FFFFFF0,0x0F0000F0,0x0F0000F0,0x00000000};
 static const u32 tileOUml[8]    = {0x00F00F00,0x00000000,0x00FFFF00,0x0F0000F0,0x0F0000F0,0x0F0000F0,0x00FFFF00,0x00000000};
+static const u32 tileSkyTop[8]  = {0xCCCCCCCC,0xCCCCCC1C,0xCCCCCCCC,0xCC1CCCCC,0xCCCCCCCC,0xCCCCCCCC,0xCCCC1CCC,0xCCCCCCCC};
+static const u32 tileSkyMid[8]  = {0x11111111,0x111111C1,0x11111111,0x11C11111,0x11111111,0x111C1111,0x11111111,0x11111111};
+static const u32 tileSkyLow[8]  = {0x16111161,0x11161111,0x11111111,0x11611111,0x11111161,0x11111111,0x11161111,0x61111111};
+static const u32 tileCloud[8]   = {0x00000000,0x00066600,0x00666660,0x06699960,0x00666660,0x00066600,0x00000000,0x00000000};
+static const u32 tileFarTower[8] = {0xCCCCCCCC,0xCBBCCBBC,0xCBCBCBCB,0xCBBCCBBC,0xCBCBCBCB,0xCBBCCBBC,0xCBCBCBCB,0xBBBBBBBB};
+static const u32 tileFarLit[8]  = {0xBBBBBBBB,0xBBDBBBDB,0xBBBBBBBB,0xBDBBBDBB,0xBBBBBBBB,0xBBDBBBDB,0xBBBBBBBB,0xBBBBBBBB};
+static const u32 tileFacadeGrey[8] = {0x33333333,0x3F3F3333,0x33333333,0x33333F3F,0x33333333,0x3F33333F,0x33333333,0x333F3333};
+static const u32 tileFacadeBrick[8] = {0x777A7777,0x777777A7,0x7D777777,0x7777D777,0x77777777,0x77A77777,0x777777D7,0xA7777777};
+static const u32 tileFacadeDark[8] = {0xBBBB2BBB,0xB2BBBBBB,0xBBBBBBB2,0xBB2BBBBB,0xBBBB2BBB,0xBBBBBBBB,0xB2BBBB2B,0xBBBBBBBB};
+static const u32 tileRoof[8]    = {0x88888888,0x8DDDDDD8,0x88888888,0x8A8A8A88,0xAAAAAAAA,0x77777777,0x77777777,0x77777777};
+static const u32 tileDoor[8]    = {0xBBBBBBBB,0xB777777B,0xB7AAAA7B,0xB7A00A7B,0xB7A00A7B,0xB7AAAA7B,0xB777777B,0xBBBBBBBB};
+static const u32 tileSidewalk[8] = {0x99999999,0x9F9F9F9F,0x33333333,0x3F333F33,0x33333333,0x333F3333,0x33333333,0x3F33333F};
+static const u32 tileCurb[8]    = {0xFFFFFFFF,0x99999999,0x33333333,0x33333333,0xBBBBBBBB,0xBBBBBBBB,0xBBBBBBBB,0xBBBBBBBB};
+static const u32 tileRoadDark[8] = {0xB3B33333,0x333B333B,0x33333333,0x3B3333B3,0x33333333,0x333B3333,0xB333333B,0x33333333};
+static const u32 tileStreetLamp[8] = {0x000DD000,0x000DD000,0x000BB000,0x000BB000,0x000BB000,0x000BB000,0x00BBBB00,0x000BB000};
 
 static const u16 palette0[16] =
 {
     RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(0,1,5),
+    RGB3_3_3_TO_VDPCOLOR(0,2,7),
     RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(3,3,4),
+    RGB3_3_3_TO_VDPCOLOR(4,4,5),
     RGB3_3_3_TO_VDPCOLOR(0,6,1),
     RGB3_3_3_TO_VDPCOLOR(0,3,1),
-    RGB3_3_3_TO_VDPCOLOR(3,5,7),
+    RGB3_3_3_TO_VDPCOLOR(2,5,7),
     RGB3_3_3_TO_VDPCOLOR(5,3,1),
     RGB3_3_3_TO_VDPCOLOR(7,1,0),
     RGB3_3_3_TO_VDPCOLOR(7,7,7),
-    RGB3_3_3_TO_VDPCOLOR(3,1,0),
-    RGB3_3_3_TO_VDPCOLOR(1,1,3),
-    RGB3_3_3_TO_VDPCOLOR(0,0,3),
-    RGB3_3_3_TO_VDPCOLOR(7,5,2),
+    RGB3_3_3_TO_VDPCOLOR(2,1,0),
+    RGB3_3_3_TO_VDPCOLOR(1,1,2),
+    RGB3_3_3_TO_VDPCOLOR(0,0,4),
+    RGB3_3_3_TO_VDPCOLOR(7,5,1),
     RGB3_3_3_TO_VDPCOLOR(0,0,0),
     RGB3_3_3_TO_VDPCOLOR(7,7,7)
 };
@@ -490,6 +520,21 @@ static void loadTiles(void)
     VDP_loadTileData(tileARing, TILE_A_RING, 1, DMA);
     VDP_loadTileData(tileAUml, TILE_A_UML, 1, DMA);
     VDP_loadTileData(tileOUml, TILE_O_UML, 1, DMA);
+    VDP_loadTileData(tileSkyTop, TILE_SKY_TOP, 1, DMA);
+    VDP_loadTileData(tileSkyMid, TILE_SKY_MID, 1, DMA);
+    VDP_loadTileData(tileSkyLow, TILE_SKY_LOW, 1, DMA);
+    VDP_loadTileData(tileCloud, TILE_CLOUD, 1, DMA);
+    VDP_loadTileData(tileFarTower, TILE_FAR_TOWER, 1, DMA);
+    VDP_loadTileData(tileFarLit, TILE_FAR_LIT, 1, DMA);
+    VDP_loadTileData(tileFacadeGrey, TILE_FACADE_GREY, 1, DMA);
+    VDP_loadTileData(tileFacadeBrick, TILE_FACADE_BRICK, 1, DMA);
+    VDP_loadTileData(tileFacadeDark, TILE_FACADE_DARK, 1, DMA);
+    VDP_loadTileData(tileRoof, TILE_ROOF, 1, DMA);
+    VDP_loadTileData(tileDoor, TILE_DOOR, 1, DMA);
+    VDP_loadTileData(tileSidewalk, TILE_SIDEWALK, 1, DMA);
+    VDP_loadTileData(tileCurb, TILE_CURB, 1, DMA);
+    VDP_loadTileData(tileRoadDark, TILE_ROAD_DARK, 1, DMA);
+    VDP_loadTileData(tileStreetLamp, TILE_STREET_LAMP, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -541,43 +586,53 @@ static void drawPanel(u8 x, u8 y, u8 w, u8 h)
 
 static void drawSkyline(void)
 {
-    const u8 heights[9] = {7, 11, 8, 13, 10, 12, 9, 14, 8};
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_SKY), 0, 0, SCREEN_TILES_W, SCREEN_TILES_H);
+    const u8 farX[10] = {0, 3, 7, 11, 16, 21, 25, 29, 34, 37};
+    const u8 farW[10] = {3, 4, 3, 5, 4, 3, 5, 4, 3, 3};
+    const u8 farH[10] = {7, 11, 9, 13, 8, 10, 12, 9, 14, 8};
 
-    for (u8 i = 0; i < 9; i++)
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_SKY_TOP), 0, HUD_TILES_H, SCREEN_TILES_W, 5);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_SKY_MID), 0, HUD_TILES_H + 5, SCREEN_TILES_W, 6);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_SKY_LOW), 0, HUD_TILES_H + 11, SCREEN_TILES_W, SCREEN_TILES_H - (HUD_TILES_H + 11));
+
+    for (u8 i = 0; i < 10; i++)
     {
-        const u8 x = i * 5;
-        const u8 h = heights[i];
-        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), x, FLOOR_Y - h, 5, h);
-        if (x + 4 < SCREEN_TILES_W)
+        const u8 x = farX[i];
+        const u8 h = farH[i];
+        const u8 w = farW[i];
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_FAR_TOWER), x, FLOOR_Y - h - 2, w, h + 2);
+        for (u8 yy = 1; yy < h; yy += 2)
         {
-            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WIN_OFF), x + 4, FLOOR_Y - h + 1, 1, h - 1);
+            for (u8 xx = (i + yy) & 1; xx < w; xx += 2)
+            {
+                if (((xx + yy + i) & 3) == 0) VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FAR_LIT), x + xx, FLOOR_Y - h - 2 + yy);
+            }
         }
         if ((i & 1) == 0)
         {
-            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_RED), x + 2, FLOOR_Y - h - 1);
-        }
-        else
-        {
-            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_YELLOW), x + 1, FLOOR_Y - h);
-            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_YELLOW), x + 3, FLOOR_Y - h);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_RED), x + (w / 2), FLOOR_Y - h - 3);
         }
     }
 
-    for (u8 x = 0; x < SCREEN_TILES_W; x += 4)
+    for (u8 x = 1; x < SCREEN_TILES_W; x += 7)
     {
         VDP_setTileMapXY(BG_B, attr(PAL0, TILE_GREEN), x, FLOOR_Y - 1);
+    }
+    for (u8 x = 4; x < SCREEN_TILES_W; x += 11)
+    {
+        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_STREET_LAMP), x, FLOOR_Y - 3);
+        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_DARK), x, FLOOR_Y - 2);
     }
 }
 
 static void drawRoad(void)
 {
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROAD), 0, FLOOR_Y + 1, SCREEN_TILES_W, 3);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_SIDEWALK), 0, FLOOR_Y - 1, SCREEN_TILES_W, 1);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_CURB), 0, FLOOR_Y, SCREEN_TILES_W, 1);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROAD_DARK), 0, FLOOR_Y + 1, SCREEN_TILES_W, 3);
     for (u8 x = 1; x < SCREEN_TILES_W; x += 6)
     {
         VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_LINE), x, FLOOR_Y + 2, 3, 1);
     }
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WHITE), 0, FLOOR_Y, SCREEN_TILES_W, 1);
     VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), 0, FLOOR_Y + 4, SCREEN_TILES_W, 1);
 }
 
@@ -710,6 +765,18 @@ static void drawBuildingChunks(const Building *b, u8 visibleH, u8 drawY)
     }
 }
 
+static u8 buildingBodyTile(const Building *b)
+{
+    if ((b->x & 3) == 0) return TILE_FACADE_GREY;
+    if ((b->x & 1) == 0) return TILE_FACADE_BRICK;
+    return TILE_YELLOW;
+}
+
+static u8 buildingShadeTile(const Building *b)
+{
+    return ((b->x + b->w) & 1) ? TILE_FACADE_DARK : TILE_DARK;
+}
+
 static void drawBuilding(const Building *b)
 {
     if (!b->alive && !b->collapsing) return;
@@ -722,26 +789,32 @@ static void drawBuilding(const Building *b)
         return;
     }
 
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_YELLOW), b->x, drawY, b->w, visibleH);
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WHITE), b->x, drawY, b->w, 1);
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), b->x, drawY, 1, visibleH);
+    const u8 bodyTile = buildingBodyTile(b);
+    const u8 shadeTile = buildingShadeTile(b);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, bodyTile), b->x, drawY, b->w, visibleH);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROOF), b->x, drawY, b->w, 1);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, shadeTile), b->x, drawY, 1, visibleH);
     if (!b->collapsing && visibleH > 2) VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_RED), b->x + 1, drawY + visibleH - 2, b->w - 2, 1);
     if (b->w > 4 && visibleH > 2)
     {
-        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_YELLOW), b->x + b->w - 1, drawY + 1, 1, visibleH - 2);
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_FACADE_DARK), b->x + b->w - 1, drawY + 1, 1, visibleH - 2);
     }
     for (u8 yy = 1; yy < visibleH; yy += 2)
     {
         for (u8 xx = 1; xx + 1 < b->w; xx += 2)
         {
-            const bool broken = ((xx + yy) & 5) == 0;
+            const bool broken = ((xx + yy + b->x) & 5) == 0;
             VDP_setTileMapXY(BG_B, attr(PAL0, broken ? TILE_WIN_OFF : TILE_WIN_ON), b->x + xx, drawY + yy);
+            if (!broken && (xx + 1 < b->w) && (((xx * 3) + yy + b->x) & 7) == 0)
+            {
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WIN_OFF), b->x + xx + 1, drawY + yy);
+            }
         }
     }
     if (!b->collapsing && visibleH > 5 && b->w > 3)
     {
-        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_DARK), b->x + 1, drawY + visibleH - 1);
-        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WHITE), b->x + 2, drawY + visibleH - 1);
+        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_DOOR), b->x + 1, drawY + visibleH - 1);
+        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FACADE_DARK), b->x + 2, drawY + visibleH - 1);
     }
     drawBuildingChunks(b, visibleH, drawY);
     if (b->cracking) drawBuildingCracks(b, visibleH);
@@ -757,7 +830,7 @@ static void drawBuilding(const Building *b)
 
 static void drawBuildings(void)
 {
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_SKY), 0, HUD_TILES_H, SCREEN_TILES_W, FLOOR_Y - HUD_TILES_H);
+    drawSkyline();
     for (u8 i = 0; i < MAX_BUILDINGS; i++) drawBuilding(&buildings[i]);
     drawRoad();
 }
