@@ -9,6 +9,8 @@
 #define MAX_MONSTERS 3
 #define MAX_ENEMIES 3
 #define MAX_SHOTS 4
+#define MAX_PEOPLE 4
+#define MAX_DAMAGE_MARKS 16
 #define PLAYER_MAX_HEALTH 8
 #define PLAYER_W 48
 #define PLAYER_H 56
@@ -66,6 +68,8 @@ typedef struct
     u8 w;
     u8 h;
     u8 damage;
+    u8 damageX[MAX_DAMAGE_MARKS];
+    u8 damageY[MAX_DAMAGE_MARKS];
     u8 colorPal;
     bool alive;
 } Building;
@@ -75,6 +79,7 @@ typedef struct
     s16 x;
     s16 y;
     s16 speed;
+    u8 stepTimer;
     u8 cooldown;
     bool active;
 } Enemy;
@@ -84,8 +89,17 @@ typedef struct
     s16 x;
     s16 y;
     s16 speed;
+    u8 stepTimer;
     bool active;
 } Shot;
+
+typedef struct
+{
+    s16 x;
+    s16 y;
+    s16 speed;
+    bool active;
+} Person;
 
 typedef struct
 {
@@ -181,6 +195,7 @@ static Sprite *playerSprite = NULL;
 static Building buildings[MAX_BUILDINGS];
 static Enemy enemies[MAX_ENEMIES];
 static Shot shots[MAX_SHOTS];
+static Person people[MAX_PEOPLE];
 static u8 selectedMonster = 0;
 static u8 currentCity = 0;
 static u8 playerHealth = PLAYER_MAX_HEALTH;
@@ -335,6 +350,7 @@ static void resetThreats(void)
 {
     for (u8 i = 0; i < MAX_ENEMIES; i++) enemies[i].active = FALSE;
     for (u8 i = 0; i < MAX_SHOTS; i++) shots[i].active = FALSE;
+    for (u8 i = 0; i < MAX_PEOPLE; i++) people[i].active = FALSE;
 }
 
 static void initBuildings(void)
@@ -350,6 +366,11 @@ static void initBuildings(void)
         buildings[i].h = hs[i];
         buildings[i].y = FLOOR_Y - hs[i];
         buildings[i].damage = 0;
+        for (u8 d = 0; d < MAX_DAMAGE_MARKS; d++)
+        {
+            buildings[i].damageX[d] = 0;
+            buildings[i].damageY[d] = 0;
+        }
         buildings[i].colorPal = PAL0;
         buildings[i].alive = TRUE;
     }
@@ -368,10 +389,10 @@ static void drawBuilding(const Building *b)
             VDP_setTileMapXY(BG_B, attr(PAL0, broken ? TILE_WIN_OFF : TILE_WIN_ON), b->x + xx, b->y + yy);
         }
     }
-    for (u8 d = 0; d < b->damage; d++)
+    for (u8 d = 0; d < b->damage && d < MAX_DAMAGE_MARKS; d++)
     {
-        const u8 cx = b->x + 1 + ((d * 2) % (b->w - 1));
-        const u8 cy = b->y + 1 + d;
+        const u8 cx = b->damageX[d];
+        const u8 cy = b->damageY[d];
         if (cy < FLOOR_Y) VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CRACK), cx, cy);
     }
 }
@@ -386,18 +407,18 @@ static void drawBuildings(void)
 static void drawHud(void)
 {
     char buf[24];
-    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_DARK), 0, 0, SCREEN_TILES_W, 3);
+    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_DARK), 0, 0, SCREEN_TILES_W, 4);
     VDP_setTextPalette(PAL0);
-    VDP_drawText("P1", 1, 1);
-    intToStr(score, buf, 1);
-    VDP_drawText("SCORE", 4, 1);
-    VDP_drawText(buf, 10, 1);
-    VDP_drawText("LIV", 17, 1);
+    VDP_drawText("P1", 1, 0);
+    VDP_drawText("SCORE", 5, 0);
+    intToStr(score, buf, 5);
+    VDP_drawText(buf, 11, 0);
+    VDP_drawText("LIV", 1, 2);
     for (u8 i = 0; i < PLAYER_MAX_HEALTH; i++)
     {
-        VDP_setTileMapXY(BG_A, attr(PAL0, i < playerHealth ? TILE_RED : TILE_ROAD), 21 + i, 1);
+        VDP_setTileMapXY(BG_A, attr(PAL0, i < playerHealth ? TILE_RED : TILE_ROAD), 5 + i, 2);
     }
-    drawTextSv(cities[currentCity], 30, 1);
+    drawTextSv(cities[currentCity], 18, 2);
 }
 
 static void drawMonsterBody(s16 tx, s16 ty, u8 monster, bool big, bool punch)
@@ -555,7 +576,8 @@ static void spawnEnemy(void)
             enemies[i].x = fromRight ? 320 : -24;
             enemies[i].y = (FLOOR_Y - 1) * 8;
             enemies[i].speed = fromRight ? -1 : 1;
-            enemies[i].cooldown = 35 + (i * 10);
+            enemies[i].stepTimer = 0;
+            enemies[i].cooldown = 90 + (i * 20);
             enemies[i].active = TRUE;
             return;
         }
@@ -571,8 +593,24 @@ static void spawnShot(s16 x, s16 y, s16 speed)
             shots[i].x = x;
             shots[i].y = y;
             shots[i].speed = speed;
+            shots[i].stepTimer = 0;
             shots[i].active = TRUE;
             playTone(280, 4);
+            return;
+        }
+    }
+}
+
+static void spawnPersonNearBuilding(const Building *b)
+{
+    for (u8 i = 0; i < MAX_PEOPLE; i++)
+    {
+        if (!people[i].active)
+        {
+            people[i].x = (b->x * 8) + 8;
+            people[i].y = (FLOOR_Y * 8) - 8;
+            people[i].speed = ((frame + i) & 1) ? 1 : -1;
+            people[i].active = TRUE;
             return;
         }
     }
@@ -599,14 +637,19 @@ static bool rectsOverlap(s16 ax, s16 ay, s16 aw, s16 ah, s16 bx, s16 by, s16 bw,
 
 static void updateThreats(void)
 {
-    if ((frame & 127) == 0) spawnEnemy();
+    if ((frame & 191) == 0) spawnEnemy();
 
     for (u8 i = 0; i < MAX_ENEMIES; i++)
     {
         Enemy *e = &enemies[i];
         if (!e->active) continue;
 
-        e->x += e->speed;
+        e->stepTimer++;
+        if (e->stepTimer >= 2)
+        {
+            e->stepTimer = 0;
+            e->x += e->speed;
+        }
         if (e->x < -40 || e->x > 340)
         {
             e->active = FALSE;
@@ -616,9 +659,9 @@ static void updateThreats(void)
         if (e->cooldown > 0) e->cooldown--;
         if (e->cooldown == 0)
         {
-            const s16 shotSpeed = (player.x < e->x) ? -3 : 3;
+            const s16 shotSpeed = (player.x < e->x) ? -1 : 1;
             spawnShot(e->x + 8, e->y - 18, shotSpeed);
-            e->cooldown = 80;
+            e->cooldown = 130;
         }
 
         if (rectsOverlap(player.x, player.y, 40, 48, e->x, e->y, 24, 12))
@@ -633,7 +676,12 @@ static void updateThreats(void)
         Shot *s = &shots[i];
         if (!s->active) continue;
 
-        s->x += s->speed;
+        s->stepTimer++;
+        if (s->stepTimer >= 2)
+        {
+            s->stepTimer = 0;
+            s->x += s->speed;
+        }
         if (s->x < -8 || s->x > 328)
         {
             s->active = FALSE;
@@ -647,7 +695,45 @@ static void updateThreats(void)
         }
     }
 
+    for (u8 i = 0; i < MAX_PEOPLE; i++)
+    {
+        Person *p = &people[i];
+        if (!p->active) continue;
+
+        if ((frame & 3) == 0) p->x += p->speed;
+        if (p->x < 0)
+        {
+            p->x = 0;
+            p->speed = 1;
+        }
+        if (p->x > 312)
+        {
+            p->x = 312;
+            p->speed = -1;
+        }
+    }
+
     if (invulnerableTimer > 0) invulnerableTimer--;
+}
+
+static bool eatPerson(void)
+{
+    for (u8 i = 0; i < MAX_PEOPLE; i++)
+    {
+        Person *p = &people[i];
+        if (!p->active) continue;
+
+        if (rectsOverlap(player.x + 8, player.y + 12, 32, 38, p->x, p->y - 8, 8, 8))
+        {
+            p->active = FALSE;
+            if (playerHealth < PLAYER_MAX_HEALTH) playerHealth++;
+            score += 25;
+            playTone(170, 8);
+            return TRUE;
+        }
+    }
+
+    return FALSE;
 }
 
 static bool attackEnemies(void)
@@ -695,11 +781,19 @@ static void damageBuildings(ClimbContact contact)
     if (!b->alive) return;
     if ((player.y / 8) + 4 >= b->y)
     {
+        const u8 mark = b->damage < MAX_DAMAGE_MARKS ? b->damage : MAX_DAMAGE_MARKS - 1;
+        const s16 rawY = (player.y / 8) + 3;
+        const u8 hitY = rawY < b->y ? b->y : (rawY >= FLOOR_Y ? FLOOR_Y - 1 : rawY);
+        const u8 hitX = contact.attackDir > 0 ? b->x : (b->x + b->w - 1);
+
         if (b->damage < b->h - 2)
         {
+            b->damageX[mark] = hitX;
+            b->damageY[mark] = hitY;
             b->damage++;
             score += 10;
             playTone(80 + (b->damage * 4), 9);
+            if ((b->damage & 1) != 0) spawnPersonNearBuilding(b);
         }
         else
         {
@@ -799,7 +893,7 @@ static void updatePlayer(u16 joy, u16 pressed)
     {
         player.punching = TRUE;
         player.punchTimer = 10;
-        if (!attackEnemies() && climbing) damageBuildings(climbContact);
+        if (!eatPerson() && !attackEnemies() && climbing) damageBuildings(climbContact);
     }
 
     if (!player.grounded && !climbing)
@@ -848,6 +942,14 @@ static void redrawPlayFrame(void)
     {
         const Shot *s = &shots[i];
         if (s->active) VDP_setTileMapXY(BG_A, attr(PAL0, TILE_WHITE), s->x / 8, s->y / 8);
+    }
+
+    for (u8 i = 0; i < MAX_PEOPLE; i++)
+    {
+        const Person *p = &people[i];
+        if (!p->active) continue;
+        VDP_setTileMapXY(BG_A, attr(PAL0, TILE_WHITE), p->x / 8, p->y / 8);
+        VDP_setTileMapXY(BG_A, attr(PAL0, TILE_GREEN), p->x / 8, (p->y / 8) - 1);
     }
 
     updatePlayerSprite();
