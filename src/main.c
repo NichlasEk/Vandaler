@@ -9,14 +9,41 @@
 #define MAX_BUILDINGS 5
 #define MAX_MONSTERS 3
 #define MAX_ENEMIES 3
-#define MAX_SHOTS 4
+#define MAX_TANKS 2
+#define MAX_HELIS 2
+#define MAX_SHOTS 10
 #define MAX_PEOPLE 4
+#define MAX_EXPLOSIONS 4
 #define MAX_DAMAGE_MARKS 16
 #define PLAYER_MAX_HEALTH 8
 #define PLAYER_W 48
 #define PLAYER_H 56
 #define PLAYER_GROUND_Y ((FLOOR_Y - 7) * 8)
-#define PLAYER_SPRITE_FRAMES 6
+#define PLAYER_SPRITE_FRAMES 12
+#define POSE_IDLE 0
+#define POSE_CLIMB_UP 1
+#define POSE_PUNCH 2
+#define POSE_PUNCH_UP 3
+#define POSE_PUNCH_DIAG_UP 4
+#define POSE_PUNCH_DIAG_DOWN 5
+#define POSE_CLIMB_DOWN 6
+#define POSE_CLIMB_PUNCH_IN 7
+#define POSE_CLIMB_PUNCH_UP 8
+#define POSE_CLIMB_PUNCH_DIAG_UP 9
+#define POSE_CLIMB_PUNCH_DIAG_DOWN 10
+#define POSE_CLIMB_PUNCH_OUT 11
+#define PLAYER_HURT_X 14
+#define PLAYER_HURT_Y 10
+#define PLAYER_HURT_W 20
+#define PLAYER_HURT_H 38
+#define ENEMY_HURT_X 7
+#define ENEMY_HURT_Y 5
+#define ENEMY_HURT_W 10
+#define ENEMY_HURT_H 8
+#define SHOT_HURT_X 2
+#define SHOT_HURT_Y 2
+#define SHOT_HURT_W 4
+#define SHOT_HURT_H 4
 
 #define TILE_SKY     (TILE_USER_INDEX + 0)
 #define TILE_DARK    (TILE_USER_INDEX + 1)
@@ -55,12 +82,25 @@ typedef struct
 {
     s16 x;
     s16 y;
+    s16 w;
+    s16 h;
+    s8 xDir;
+    s8 yDir;
+    u8 pose;
+} AttackBox;
+
+typedef struct
+{
+    s16 x;
+    s16 y;
     s16 vy;
     s16 dir;
     u8 monster;
     u8 punching;
     u8 punchTimer;
     u8 attackPose;
+    u8 climbPose;
+    AttackBox attack;
     bool grounded;
 } Player;
 
@@ -83,7 +123,6 @@ typedef struct
     s16 y;
     s16 speed;
     u8 stepTimer;
-    u8 cooldown;
     bool active;
     Sprite *sprite;
 } Enemy;
@@ -94,20 +133,34 @@ typedef struct
     s16 y;
     s16 speed;
     u8 stepTimer;
+    u8 cooldown;
     bool active;
     Sprite *sprite;
-} Shot;
+} Tank;
 
 typedef struct
 {
     s16 x;
     s16 y;
-    s16 w;
-    s16 h;
-    s8 xDir;
-    s8 yDir;
-    u8 pose;
-} AttackBox;
+    s16 speed;
+    u8 stepTimer;
+    u8 cooldown;
+    u8 burst;
+    u8 burstDelay;
+    bool active;
+    Sprite *sprite;
+} Helicopter;
+
+typedef struct
+{
+    s16 x;
+    s16 y;
+    s16 dx;
+    s16 dy;
+    u8 stepTimer;
+    bool active;
+    Sprite *sprite;
+} Shot;
 
 typedef struct
 {
@@ -120,11 +173,27 @@ typedef struct
 
 typedef struct
 {
+    s16 x;
+    s16 y;
+    u8 timer;
+    bool active;
+    Sprite *sprite;
+} Explosion;
+
+typedef struct
+{
     bool active;
     s16 snapX;
     s8 attackDir;
     u8 building;
 } ClimbContact;
+
+typedef struct
+{
+    bool active;
+    s16 y;
+    u8 building;
+} RoofContact;
 
 static const u32 tileSky[8]     = {0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111,0x11111111};
 static const u32 tileDark[8]    = {0x22222222,0x22222222,0x22222222,0x22222222,0x22222222,0x22222222,0x22222222,0x22222222};
@@ -211,8 +280,11 @@ static Player player;
 static Sprite *playerSprite = NULL;
 static Building buildings[MAX_BUILDINGS];
 static Enemy enemies[MAX_ENEMIES];
+static Tank tanks[MAX_TANKS];
+static Helicopter helis[MAX_HELIS];
 static Shot shots[MAX_SHOTS];
 static Person people[MAX_PEOPLE];
+static Explosion explosions[MAX_EXPLOSIONS];
 static u8 selectedMonster = 0;
 static u8 currentCity = 0;
 static u8 playerHealth = PLAYER_MAX_HEALTH;
@@ -226,6 +298,7 @@ static u8 hudHealth = 0xFF;
 static u8 hudCity = 0xFF;
 
 static ClimbContact getClimbContact(void);
+static RoofContact getRoofContact(void);
 
 static u16 attr(u8 pal, u16 tile)
 {
@@ -401,6 +474,16 @@ static void resetThreats(void)
         enemies[i].active = FALSE;
         if (enemies[i].sprite != NULL) SPR_setVisibility(enemies[i].sprite, HIDDEN);
     }
+    for (u8 i = 0; i < MAX_TANKS; i++)
+    {
+        tanks[i].active = FALSE;
+        if (tanks[i].sprite != NULL) SPR_setVisibility(tanks[i].sprite, HIDDEN);
+    }
+    for (u8 i = 0; i < MAX_HELIS; i++)
+    {
+        helis[i].active = FALSE;
+        if (helis[i].sprite != NULL) SPR_setVisibility(helis[i].sprite, HIDDEN);
+    }
     for (u8 i = 0; i < MAX_SHOTS; i++)
     {
         shots[i].active = FALSE;
@@ -410,6 +493,11 @@ static void resetThreats(void)
     {
         people[i].active = FALSE;
         if (people[i].sprite != NULL) SPR_setVisibility(people[i].sprite, HIDDEN);
+    }
+    for (u8 i = 0; i < MAX_EXPLOSIONS; i++)
+    {
+        explosions[i].active = FALSE;
+        if (explosions[i].sprite != NULL) SPR_setVisibility(explosions[i].sprite, HIDDEN);
     }
 }
 
@@ -562,6 +650,14 @@ static void hideThreatSprites(void)
     {
         if (enemies[i].sprite != NULL) SPR_setVisibility(enemies[i].sprite, HIDDEN);
     }
+    for (u8 i = 0; i < MAX_TANKS; i++)
+    {
+        if (tanks[i].sprite != NULL) SPR_setVisibility(tanks[i].sprite, HIDDEN);
+    }
+    for (u8 i = 0; i < MAX_HELIS; i++)
+    {
+        if (helis[i].sprite != NULL) SPR_setVisibility(helis[i].sprite, HIDDEN);
+    }
     for (u8 i = 0; i < MAX_SHOTS; i++)
     {
         if (shots[i].sprite != NULL) SPR_setVisibility(shots[i].sprite, HIDDEN);
@@ -569,6 +665,10 @@ static void hideThreatSprites(void)
     for (u8 i = 0; i < MAX_PEOPLE; i++)
     {
         if (people[i].sprite != NULL) SPR_setVisibility(people[i].sprite, HIDDEN);
+    }
+    for (u8 i = 0; i < MAX_EXPLOSIONS; i++)
+    {
+        if (explosions[i].sprite != NULL) SPR_setVisibility(explosions[i].sprite, HIDDEN);
     }
 }
 
@@ -590,7 +690,7 @@ static void updatePlayerSprite(void)
     showPlayerSprite();
     SPR_setPalette(playerSprite, pal);
     if (player.punching) frame += player.attackPose;
-    else if (!player.grounded && getClimbContact().active) frame += 1;
+    else if (!player.grounded && getClimbContact().active) frame += player.climbPose;
     SPR_setFrame(playerSprite, frame);
     SPR_setHFlip(playerSprite, player.dir < 0);
     SPR_setPosition(playerSprite, player.x, player.y);
@@ -610,6 +710,36 @@ static void updateThreatSprites(void)
         {
             SPR_setHFlip(e->sprite, e->speed < 0);
             SPR_setPosition(e->sprite, e->x, e->y);
+        }
+    }
+
+    for (u8 i = 0; i < MAX_TANKS; i++)
+    {
+        Tank *t = &tanks[i];
+        if (t->sprite == NULL)
+        {
+            t->sprite = SPR_addSprite(&tank_sprite, t->x, t->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
+        }
+        SPR_setVisibility(t->sprite, t->active ? VISIBLE : HIDDEN);
+        if (t->active)
+        {
+            SPR_setHFlip(t->sprite, t->speed < 0);
+            SPR_setPosition(t->sprite, t->x, t->y);
+        }
+    }
+
+    for (u8 i = 0; i < MAX_HELIS; i++)
+    {
+        Helicopter *h = &helis[i];
+        if (h->sprite == NULL)
+        {
+            h->sprite = SPR_addSprite(&helicopter_sprite, h->x, h->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
+        }
+        SPR_setVisibility(h->sprite, h->active ? VISIBLE : HIDDEN);
+        if (h->active)
+        {
+            SPR_setHFlip(h->sprite, h->speed < 0);
+            SPR_setPosition(h->sprite, h->x, h->y);
         }
     }
 
@@ -636,6 +766,21 @@ static void updateThreatSprites(void)
         {
             SPR_setHFlip(p->sprite, p->speed < 0);
             SPR_setPosition(p->sprite, p->x, p->y);
+        }
+    }
+
+    for (u8 i = 0; i < MAX_EXPLOSIONS; i++)
+    {
+        Explosion *ex = &explosions[i];
+        if (ex->sprite == NULL)
+        {
+            ex->sprite = SPR_addSprite(&explosion_sprite, ex->x, ex->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
+        }
+        SPR_setVisibility(ex->sprite, ex->active ? VISIBLE : HIDDEN);
+        if (ex->active)
+        {
+            SPR_setFrame(ex->sprite, ex->timer < 5 ? 1 : 0);
+            SPR_setPosition(ex->sprite, ex->x, ex->y);
         }
     }
 }
@@ -702,7 +847,8 @@ static void startCity(void)
     player.monster = selectedMonster;
     player.punching = FALSE;
     player.punchTimer = 0;
-    player.attackPose = 2;
+    player.attackPose = POSE_PUNCH;
+    player.climbPose = POSE_CLIMB_UP;
     player.grounded = TRUE;
     playerHealth = PLAYER_MAX_HEALTH;
     invulnerableTimer = 0;
@@ -725,14 +871,51 @@ static void spawnEnemy(void)
             enemies[i].y = (FLOOR_Y * 8) - 16;
             enemies[i].speed = fromRight ? -1 : 1;
             enemies[i].stepTimer = 0;
-            enemies[i].cooldown = 90 + (i * 20);
             enemies[i].active = TRUE;
             return;
         }
     }
 }
 
-static void spawnShot(s16 x, s16 y, s16 speed)
+static void spawnTank(void)
+{
+    for (u8 i = 0; i < MAX_TANKS; i++)
+    {
+        if (!tanks[i].active)
+        {
+            const bool fromRight = ((frame >> 7) & 1) != 0;
+            tanks[i].x = fromRight ? 320 : -24;
+            tanks[i].y = (FLOOR_Y * 8) - 16;
+            tanks[i].speed = fromRight ? -1 : 1;
+            tanks[i].stepTimer = 0;
+            tanks[i].cooldown = 120;
+            tanks[i].active = TRUE;
+            return;
+        }
+    }
+}
+
+static void spawnHelicopter(void)
+{
+    for (u8 i = 0; i < MAX_HELIS; i++)
+    {
+        if (!helis[i].active)
+        {
+            const bool fromRight = ((frame >> 8) & 1) != 0;
+            helis[i].x = fromRight ? 320 : -32;
+            helis[i].y = 48 + ((frame >> 4) & 31);
+            helis[i].speed = fromRight ? -1 : 1;
+            helis[i].stepTimer = 0;
+            helis[i].cooldown = 100;
+            helis[i].burst = 0;
+            helis[i].burstDelay = 0;
+            helis[i].active = TRUE;
+            return;
+        }
+    }
+}
+
+static void spawnShot(s16 x, s16 y, s16 dx, s16 dy)
 {
     for (u8 i = 0; i < MAX_SHOTS; i++)
     {
@@ -740,7 +923,8 @@ static void spawnShot(s16 x, s16 y, s16 speed)
         {
             shots[i].x = x;
             shots[i].y = y;
-            shots[i].speed = speed;
+            shots[i].dx = dx;
+            shots[i].dy = dy;
             shots[i].stepTimer = 0;
             shots[i].active = TRUE;
             playTone(280, 4);
@@ -759,6 +943,21 @@ static void spawnPersonNearBuilding(const Building *b)
             people[i].y = (FLOOR_Y * 8) - 16;
             people[i].speed = ((frame + i) & 1) ? 1 : -1;
             people[i].active = TRUE;
+            return;
+        }
+    }
+}
+
+static void spawnExplosion(s16 x, s16 y)
+{
+    for (u8 i = 0; i < MAX_EXPLOSIONS; i++)
+    {
+        if (!explosions[i].active)
+        {
+            explosions[i].x = x + 4;
+            explosions[i].y = y;
+            explosions[i].timer = 10;
+            explosions[i].active = TRUE;
             return;
         }
     }
@@ -783,6 +982,11 @@ static bool rectsOverlap(s16 ax, s16 ay, s16 aw, s16 ah, s16 bx, s16 by, s16 bw,
     return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
+static bool playerHitsRect(s16 x, s16 y, s16 w, s16 h)
+{
+    return rectsOverlap(player.x + PLAYER_HURT_X, player.y + PLAYER_HURT_Y, PLAYER_HURT_W, PLAYER_HURT_H, x, y, w, h);
+}
+
 static AttackBox getAttackBox(u16 joy)
 {
     AttackBox box;
@@ -795,7 +999,7 @@ static AttackBox getAttackBox(u16 joy)
 
     box.xDir = xDir;
     box.yDir = up ? -1 : (down ? 1 : 0);
-    box.pose = 2;
+    box.pose = POSE_PUNCH;
 
     if (up && ((joy & (BUTTON_LEFT | BUTTON_RIGHT)) == 0))
     {
@@ -803,7 +1007,7 @@ static AttackBox getAttackBox(u16 joy)
         box.y = player.y - 10;
         box.w = 28;
         box.h = 26;
-        box.pose = 3;
+        box.pose = POSE_PUNCH_UP;
         return box;
     }
 
@@ -814,12 +1018,12 @@ static AttackBox getAttackBox(u16 joy)
     if (up)
     {
         box.y = player.y + 4;
-        box.pose = 4;
+        box.pose = POSE_PUNCH_DIAG_UP;
     }
     else if (down)
     {
         box.y = player.y + 34;
-        box.pose = 5;
+        box.pose = POSE_PUNCH_DIAG_DOWN;
     }
     else box.y = player.y + 20;
 
@@ -829,6 +1033,8 @@ static AttackBox getAttackBox(u16 joy)
 static void updateThreats(void)
 {
     if ((frame & 191) == 0) spawnEnemy();
+    if ((frame & 511) == 128) spawnTank();
+    if ((frame % 768) == 256) spawnHelicopter();
 
     for (u8 i = 0; i < MAX_ENEMIES; i++)
     {
@@ -847,18 +1053,118 @@ static void updateThreats(void)
             continue;
         }
 
-        if (e->cooldown > 0) e->cooldown--;
-        if (e->cooldown == 0)
+        if (player.punching && rectsOverlap(player.attack.x, player.attack.y, player.attack.w, player.attack.h, e->x, e->y, 24, 16))
         {
-            const s16 shotSpeed = (player.x < e->x) ? -1 : 1;
-            spawnShot(e->x + 8, e->y - 18, shotSpeed);
-            e->cooldown = 130;
+            spawnExplosion(e->x, e->y);
+            e->active = FALSE;
+            score += 50;
+            playTone(42, 12);
+            continue;
         }
 
-        if (rectsOverlap(player.x, player.y, 40, 48, e->x, e->y, 24, 16))
+        if (playerHitsRect(e->x + ENEMY_HURT_X, e->y + ENEMY_HURT_Y, ENEMY_HURT_W, ENEMY_HURT_H))
         {
             hitPlayer();
             e->active = FALSE;
+        }
+    }
+
+    for (u8 i = 0; i < MAX_TANKS; i++)
+    {
+        Tank *t = &tanks[i];
+        if (!t->active) continue;
+
+        t->stepTimer++;
+        if (t->stepTimer >= 3)
+        {
+            t->stepTimer = 0;
+            t->x += t->speed;
+        }
+        if (t->x < -40 || t->x > 340)
+        {
+            t->active = FALSE;
+            continue;
+        }
+
+        if (t->cooldown > 0) t->cooldown--;
+        if (t->cooldown == 0)
+        {
+            const s16 dx = (player.x < t->x) ? -1 : 1;
+            spawnShot(t->x + 10, t->y - 2, dx, -1);
+            t->cooldown = 150;
+        }
+
+        if (player.punching && rectsOverlap(player.attack.x, player.attack.y, player.attack.w, player.attack.h, t->x, t->y, 24, 16))
+        {
+            spawnExplosion(t->x, t->y);
+            t->active = FALSE;
+            score += 100;
+            playTone(36, 14);
+            continue;
+        }
+
+        if (playerHitsRect(t->x + ENEMY_HURT_X, t->y + ENEMY_HURT_Y, ENEMY_HURT_W + 4, ENEMY_HURT_H))
+        {
+            hitPlayer();
+        }
+    }
+
+    for (u8 i = 0; i < MAX_HELIS; i++)
+    {
+        Helicopter *h = &helis[i];
+        if (!h->active) continue;
+
+        h->stepTimer++;
+        if (h->stepTimer >= 2)
+        {
+            h->stepTimer = 0;
+            h->x += h->speed;
+            if (h->x < 8)
+            {
+                h->x = 8;
+                h->speed = 1;
+            }
+            else if (h->x > 280)
+            {
+                h->x = 280;
+                h->speed = -1;
+            }
+        }
+
+        if (h->burst > 0)
+        {
+            if (h->burstDelay > 0) h->burstDelay--;
+            if (h->burstDelay == 0)
+            {
+                const s16 dx = (player.x < h->x) ? -1 : 1;
+                spawnShot(h->x + 14, h->y + 12, dx, 1);
+                h->burst--;
+                h->burstDelay = 14;
+                if (h->burst == 0) h->cooldown = 150;
+            }
+        }
+        else if (h->cooldown > 0)
+        {
+            h->cooldown--;
+            if (h->cooldown == 0)
+            {
+                h->burst = 3;
+                h->burstDelay = 1;
+            }
+        }
+
+        if (player.punching && rectsOverlap(player.attack.x, player.attack.y, player.attack.w, player.attack.h, h->x, h->y, 32, 16))
+        {
+            spawnExplosion(h->x + 4, h->y);
+            h->active = FALSE;
+            score += 150;
+            playTone(34, 14);
+            continue;
+        }
+
+        if (playerHitsRect(h->x + 8, h->y + 4, 16, 8))
+        {
+            hitPlayer();
         }
     }
 
@@ -871,15 +1177,16 @@ static void updateThreats(void)
         if (s->stepTimer >= 2)
         {
             s->stepTimer = 0;
-            s->x += s->speed;
+            s->x += s->dx;
+            s->y += s->dy;
         }
-        if (s->x < -8 || s->x > 328)
+        if (s->x < -8 || s->x > 328 || s->y < 24 || s->y > 224)
         {
             s->active = FALSE;
             continue;
         }
 
-        if (rectsOverlap(player.x, player.y, 40, 48, s->x, s->y, 8, 8))
+        if (playerHitsRect(s->x + SHOT_HURT_X, s->y + SHOT_HURT_Y, SHOT_HURT_W, SHOT_HURT_H))
         {
             hitPlayer();
             s->active = FALSE;
@@ -902,6 +1209,14 @@ static void updateThreats(void)
             p->x = 312;
             p->speed = -1;
         }
+    }
+
+    for (u8 i = 0; i < MAX_EXPLOSIONS; i++)
+    {
+        Explosion *ex = &explosions[i];
+        if (!ex->active) continue;
+        if (ex->timer > 0) ex->timer--;
+        if (ex->timer == 0) ex->active = FALSE;
     }
 
     if (invulnerableTimer > 0) invulnerableTimer--;
@@ -936,9 +1251,40 @@ static bool attackEnemies(AttackBox attack)
 
         if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, e->x, e->y, 24, 16))
         {
+            spawnExplosion(e->x, e->y);
             e->active = FALSE;
             score += 50;
             playTone(42, 12);
+            return TRUE;
+        }
+    }
+
+    for (u8 i = 0; i < MAX_TANKS; i++)
+    {
+        Tank *t = &tanks[i];
+        if (!t->active) continue;
+
+        if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, t->x, t->y, 24, 16))
+        {
+            spawnExplosion(t->x, t->y);
+            t->active = FALSE;
+            score += 100;
+            playTone(36, 14);
+            return TRUE;
+        }
+    }
+
+    for (u8 i = 0; i < MAX_HELIS; i++)
+    {
+        Helicopter *h = &helis[i];
+        if (!h->active) continue;
+
+        if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, h->x, h->y, 32, 16))
+        {
+            spawnExplosion(h->x + 4, h->y);
+            h->active = FALSE;
+            score += 150;
+            playTone(34, 14);
             return TRUE;
         }
     }
@@ -1003,6 +1349,35 @@ static bool cityCleared(void)
     return TRUE;
 }
 
+static RoofContact getRoofContact(void)
+{
+    RoofContact contact;
+    const s16 center = player.x + (PLAYER_W / 2);
+    const s16 feet = player.y + PLAYER_H;
+
+    contact.active = FALSE;
+    contact.y = PLAYER_GROUND_Y;
+    contact.building = MAX_BUILDINGS;
+
+    for (u8 i = 0; i < MAX_BUILDINGS; i++)
+    {
+        const Building *b = &buildings[i];
+        const s16 bLeft = b->x * 8;
+        const s16 bRight = (b->x + b->w) * 8;
+        const s16 bTop = b->y * 8;
+        if (!b->alive) continue;
+        if (center < bLeft + 4 || center > bRight - 4) continue;
+        if (feet < bTop - 6 || feet > bTop + 8) continue;
+
+        contact.active = TRUE;
+        contact.y = bTop - PLAYER_H;
+        contact.building = i;
+        return contact;
+    }
+
+    return contact;
+}
+
 static ClimbContact getClimbContact(void)
 {
     ClimbContact contact;
@@ -1024,7 +1399,7 @@ static ClimbContact getClimbContact(void)
         const s16 bBottom = FLOOR_Y * 8;
         if (!b->alive) continue;
 
-        if (feet < bTop + 12 || top > bBottom) continue;
+        if (feet < bTop - 6 || top > bBottom) continue;
 
         if (right >= bLeft - 6 && right <= bLeft + 10)
         {
@@ -1050,9 +1425,11 @@ static ClimbContact getClimbContact(void)
 
 static void updatePlayer(u16 joy, u16 pressed)
 {
-    const ClimbContact climbContact = getClimbContact();
-    const bool onFacade = climbContact.active && player.y < PLAYER_GROUND_Y;
-    const bool climbing = (joy & BUTTON_UP) && climbContact.active;
+    ClimbContact climbContact = getClimbContact();
+    RoofContact roofContact = getRoofContact();
+    bool onFacade;
+    bool climbing;
+    bool onRoof;
 
     if (joy & BUTTON_LEFT)
     {
@@ -1064,6 +1441,20 @@ static void updatePlayer(u16 joy, u16 pressed)
         player.x += 2;
         player.dir = 1;
     }
+
+    climbContact = getClimbContact();
+    roofContact = getRoofContact();
+    onFacade = climbContact.active && player.y < PLAYER_GROUND_Y && !roofContact.active;
+    climbing = (joy & BUTTON_UP) && climbContact.active;
+    onRoof = roofContact.active && !onFacade && !climbing;
+
+    if (onRoof)
+    {
+        player.y = roofContact.y;
+        player.vy = 0;
+        player.grounded = TRUE;
+    }
+
     if (onFacade || climbing)
     {
         player.x = climbContact.snapX;
@@ -1073,11 +1464,28 @@ static void updatePlayer(u16 joy, u16 pressed)
     }
     if (climbing && player.y > 40)
     {
+        const Building *b = &buildings[climbContact.building];
+        const s16 roofY = (b->y * 8) - PLAYER_H;
+
         player.y -= 2;
+        player.climbPose = POSE_CLIMB_UP;
+        if (player.y <= roofY)
+        {
+            const s16 bLeft = b->x * 8;
+            const s16 bRight = (b->x + b->w) * 8;
+            player.y = roofY;
+            player.x = climbContact.attackDir > 0 ? bLeft - 20 : bRight - 28;
+            player.vy = 0;
+            player.grounded = TRUE;
+            onFacade = FALSE;
+            climbing = FALSE;
+            onRoof = TRUE;
+        }
     }
     else if ((joy & BUTTON_DOWN) && onFacade && player.y < PLAYER_GROUND_Y)
     {
         player.y += 2;
+        player.climbPose = POSE_CLIMB_DOWN;
         if (player.y >= PLAYER_GROUND_Y)
         {
             player.y = PLAYER_GROUND_Y;
@@ -1096,21 +1504,40 @@ static void updatePlayer(u16 joy, u16 pressed)
         player.punching = TRUE;
         player.punchTimer = 10;
         player.attackPose = attack.pose;
-        if (!eatPerson(attack) && !attackEnemies(attack) && (onFacade || climbing)) damageBuildings(climbContact, attack);
+        if (onFacade || climbing)
+        {
+            if (attack.xDir != climbContact.attackDir) player.attackPose = POSE_CLIMB_PUNCH_OUT;
+            else if (attack.yDir < 0 && ((joy & (BUTTON_LEFT | BUTTON_RIGHT)) == 0)) player.attackPose = POSE_CLIMB_PUNCH_UP;
+            else if (attack.yDir < 0) player.attackPose = POSE_CLIMB_PUNCH_DIAG_UP;
+            else if (attack.yDir > 0) player.attackPose = POSE_CLIMB_PUNCH_DIAG_DOWN;
+            else player.attackPose = POSE_CLIMB_PUNCH_IN;
+        }
+        player.attack = attack;
+        if (!eatPerson(attack) && !attackEnemies(attack) && (onFacade || climbing) && attack.xDir == climbContact.attackDir)
+        {
+            damageBuildings(climbContact, attack);
+        }
     }
 
-    if (!player.grounded && !onFacade && !climbing)
+    if (!player.grounded && !onFacade && !climbing && !onRoof)
     {
         player.y += player.vy;
         player.vy++;
-        if (player.y >= PLAYER_GROUND_Y)
+        roofContact = getRoofContact();
+        if (roofContact.active && player.vy >= 0)
+        {
+            player.y = roofContact.y;
+            player.vy = 0;
+            player.grounded = TRUE;
+        }
+        else if (player.y >= PLAYER_GROUND_Y)
         {
             player.y = PLAYER_GROUND_Y;
             player.vy = 0;
             player.grounded = TRUE;
         }
     }
-    else if (!climbing && player.y < PLAYER_GROUND_Y && !getClimbContact().active)
+    else if (!climbing && !onRoof && player.y < PLAYER_GROUND_Y && !getClimbContact().active)
     {
         player.grounded = FALSE;
         player.vy = 2;
