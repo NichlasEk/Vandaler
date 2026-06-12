@@ -217,6 +217,10 @@ static u8 invulnerableTimer = 0;
 static u16 frame = 0;
 static u16 score = 0;
 static u16 previousJoy = 0;
+static bool hudFrameReady = FALSE;
+static u16 hudScore = 0xFFFF;
+static u8 hudHealth = 0xFF;
+static u8 hudCity = 0xFF;
 
 static ClimbContact getClimbContact(void);
 
@@ -274,6 +278,32 @@ static void drawTextSv(const char *text, u16 x, u16 y)
     }
 }
 
+static void drawAsciiTextBg(const char *text, u16 x, u16 y)
+{
+    u16 tx = x;
+
+    while (*text != 0 && tx < SCREEN_TILES_W)
+    {
+        const u8 c = *text++;
+        const u16 tile = (c < 32 || c > 127) ? TILE_FONT_INDEX : (TILE_FONT_INDEX + (c - 32));
+        VDP_setTileMapXY(BG_B, c == ' ' ? attr(PAL0, TILE_DARK) : attr(PAL0, tile), tx, y);
+        tx++;
+    }
+}
+
+static void drawTextSvBg(const char *text, u16 x, u16 y)
+{
+    const u8 *cursor = (const u8 *)text;
+    u16 tx = x;
+
+    while (*cursor != 0 && tx < SCREEN_TILES_W)
+    {
+        const u16 tile = svCharTile(&cursor);
+        VDP_setTileMapXY(BG_B, attr(PAL0, tile), tx, y);
+        tx++;
+    }
+}
+
 static void loadTiles(void)
 {
     VDP_loadTileData(tileSky, TILE_SKY, 1, DMA);
@@ -312,6 +342,7 @@ static void clearAll(void)
 {
     VDP_clearPlane(BG_A, TRUE);
     VDP_clearPlane(BG_B, TRUE);
+    hudFrameReady = FALSE;
 }
 
 static void drawPanel(u8 x, u8 y, u8 w, u8 h)
@@ -433,24 +464,41 @@ static void drawBuildings(void)
 static void drawHud(void)
 {
     char buf[24];
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), 0, 0, SCREEN_TILES_W, HUD_TILES_H);
-    VDP_setTextPalette(PAL0);
-    VDP_drawTextBG(BG_B, "P1", 1, 1);
-    VDP_drawTextBG(BG_B, "SCORE", 5, 1);
-    intToStr(score, buf, 5);
-    VDP_drawTextBG(BG_B, buf, 11, 1);
-    VDP_drawTextBG(BG_B, "LIV", 1, 2);
-    for (u8 i = 0; i < PLAYER_MAX_HEALTH; i++)
+
+    if (!hudFrameReady)
     {
-        VDP_setTileMapXY(BG_B, attr(PAL0, i < playerHealth ? TILE_RED : TILE_ROAD), 5 + i, 2);
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), 0, 0, SCREEN_TILES_W, HUD_TILES_H);
+        drawAsciiTextBg("P1", 1, 1);
+        drawAsciiTextBg("SCORE", 5, 1);
+        drawAsciiTextBg("LIV", 1, 2);
+        hudScore = 0xFFFF;
+        hudHealth = 0xFF;
+        hudCity = 0xFF;
+        hudFrameReady = TRUE;
     }
-    const u8 *cursor = (const u8 *)cities[currentCity];
-    u16 tx = 18;
-    while (*cursor != 0 && tx < SCREEN_TILES_W)
+
+    if (hudScore != score)
     {
-        const u16 tile = svCharTile(&cursor);
-        VDP_setTileMapXY(BG_B, attr(PAL0, tile), tx, 2);
-        tx++;
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), 11, 1, 5, 1);
+        intToStr(score, buf, 5);
+        drawAsciiTextBg(buf, 11, 1);
+        hudScore = score;
+    }
+
+    if (hudHealth != playerHealth)
+    {
+        for (u8 i = 0; i < PLAYER_MAX_HEALTH; i++)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, i < playerHealth ? TILE_RED : TILE_ROAD), 5 + i, 2);
+        }
+        hudHealth = playerHealth;
+    }
+
+    if (hudCity != currentCity)
+    {
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), 18, 2, SCREEN_TILES_W - 18, 1);
+        drawTextSvBg(cities[currentCity], 18, 2);
+        hudCity = currentCity;
     }
 }
 
