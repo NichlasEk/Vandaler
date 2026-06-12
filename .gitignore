@@ -1,0 +1,9 @@
+rampage.sms
+src/rom_header.c
+out/
+*.bin
+*.out
+*.o
+*.lst
+*.d
+*.sym

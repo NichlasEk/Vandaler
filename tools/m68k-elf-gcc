@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+sgdk_bin="$(cd -- "$script_dir/../.." && pwd)/SGDK/bin"
+
+if [[ ! -x "$sgdk_bin/gcc.exe" ]]; then
+    sgdk_bin="/home/nichlas/SGDK/bin"
+fi
+
+to_windows_path() {
+    local path="$1"
+    case "$path" in
+        /*) winepath -w "$path" ;;
+        *) winepath -w "$PWD/$path" ;;
+    esac
+}
+
+convert_arg() {
+    local arg="$1"
+    case "$arg" in
+        -isystem/*) printf '%s%s' "-isystem" "$(to_windows_path "${arg:8}")" ;;
+        -isystem*) if [[ ${#arg} -gt 8 ]]; then printf '%s%s' "-isystem" "$(to_windows_path "${arg:8}")"; else printf '%s' "$arg"; fi ;;
+        @/*|@./*|@../*|@*/*) printf '@%s' "$(to_windows_path "${arg#@}")" ;;
+        -I/*|-L/*|-B/*|-i/*) printf '%s%s' "${arg:0:2}" "$(to_windows_path "${arg:2}")" ;;
+        -I*|-L*|-B*|-i*) if [[ ${#arg} -gt 2 ]]; then printf '%s%s' "${arg:0:2}" "$(to_windows_path "${arg:2}")"; else printf '%s' "$arg"; fi ;;
+        /*|./*|../*|*/*) printf '%s' "$(to_windows_path "$arg")" ;;
+        *) printf '%s' "$arg" ;;
+    esac
+}
+
+converted=()
+expect_path=0
+expect_literal=0
+expect_mf=0
+dep_file=""
+
+for arg in "$@"; do
+    if (( expect_mf )); then
+        dep_file="$arg"
+        converted+=("$(to_windows_path "$arg")")
+        expect_mf=0
+        continue
+    fi
+
+    if (( expect_path )); then
+        converted+=("$(to_windows_path "$arg")")
+        expect_path=0
+        continue
+    fi
+
+    if (( expect_literal )); then
+        converted+=("$arg")
+        expect_literal=0
+        continue
+    fi
+
+    case "$arg" in
+        -MF)
+            converted+=("$arg")
+            expect_mf=1
+            ;;
+        -o|-T|-isystem)
+            converted+=("$arg")
+            expect_path=1
+            ;;
+        -MT|-MQ)
+            converted+=("$arg")
+            expect_literal=1
+            ;;
+        *)
+            converted+=("$(convert_arg "$arg")")
+            ;;
+    esac
+done
+
+wine "$sgdk_bin/gcc.exe" "${converted[@]}"
+status=$?
+
+if [[ $status -eq 0 && -n "$dep_file" && -f "$dep_file" ]]; then
+    sed -i 's#Z:\\#/#g; s#\\#/#g' "$dep_file"
+fi
+
+exit "$status"

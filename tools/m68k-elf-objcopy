@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec /home/nichlas/SGDK/bin/sgdk-wine-exec objcopy.exe "$@"
+
