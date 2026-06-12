@@ -506,6 +506,21 @@ static void stopTone(void)
     PSG_setEnvelope(3, PSG_ENVELOPE_MIN);
 }
 
+static bool hasActiveHelicopter(void)
+{
+    for (u8 i = 0; i < MAX_HELIS; i++)
+    {
+        if (helis[i].active) return TRUE;
+    }
+    return FALSE;
+}
+
+static void playRotorTone(void)
+{
+    PSG_setTone(1, 82 + ((frame >> 3) & 3));
+    PSG_setEnvelope(1, 12);
+}
+
 static void clearAll(void)
 {
     VDP_clearPlane(BG_A, TRUE);
@@ -954,6 +969,7 @@ static void updateThreatSprites(void)
         SPR_setVisibility(h->sprite, h->active ? VISIBLE : HIDDEN);
         if (h->active)
         {
+            SPR_setFrame(h->sprite, (frame >> 2) & 3);
             SPR_setHFlip(h->sprite, h->speed > 0);
             SPR_setPosition(h->sprite, h->x, h->y);
         }
@@ -2084,6 +2100,7 @@ static void handleState(u16 joy)
         case STATE_PLAY:
             updatePlayer(joy, pressed);
             updateThreats();
+            if (((frame & 7) == 0) && hasActiveHelicopter()) playRotorTone();
             updateBuildingCollapse();
             if (state == STATE_GAME_OVER)
             {
