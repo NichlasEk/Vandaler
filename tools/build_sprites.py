@@ -157,7 +157,8 @@ def validate_frame(name: str, frame: Image.Image) -> list[str]:
 
 
 def build_monsters(config: dict[str, Any], warnings: list[str]) -> None:
-    sheet = Image.new("P", (MONSTER_FRAME_W * 14 * 3, MONSTER_FRAME_H), 0)
+    frames_per_monster = max(len(monster["frames"]) for monster in config["monsters"])
+    sheet = Image.new("P", (MONSTER_FRAME_W * frames_per_monster * len(config["monsters"]), MONSTER_FRAME_H), 0)
     sheet.putpalette(PAL_IMG.getpalette())
 
     for monster_index, monster in enumerate(config["monsters"]):
@@ -183,7 +184,7 @@ def build_monsters(config: dict[str, Any], warnings: list[str]) -> None:
 
             warnings.extend(validate_frame(f"{monster_name}:{frame_index}:{pose}", frame))
             q = remap_monster_indices(quantize(frame, opaque_zero_index=2))
-            sheet.paste(q, ((monster_index * 14 + frame_index) * MONSTER_FRAME_W, 0))
+            sheet.paste(q, ((monster_index * frames_per_monster + frame_index) * MONSTER_FRAME_W, 0))
 
     out = ROOT / "res/images/monsters.png"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -242,7 +243,7 @@ def write_preview(preview: Path) -> None:
     for name in ["monsters.png", "enemy.png", "tank.png", "helicopter.png", "person.png", "shot.png", "explosion.png"]:
         im = Image.open(ROOT / "res/images" / name).convert("RGBA")
         if name == "monsters.png":
-            im = im.crop((0, 0, MONSTER_FRAME_W * 14 * 3, MONSTER_FRAME_H))
+            im = im.crop((0, 0, im.width, MONSTER_FRAME_H))
         scale = 1 if name == "monsters.png" else 3
         rows.append((name, im.resize((im.width * scale, im.height * scale), Image.Resampling.NEAREST)))
 
