@@ -39,6 +39,12 @@
 #define PLAYER_HURT_Y 10
 #define PLAYER_HURT_W 20
 #define PLAYER_HURT_H 38
+#define PLAYER_JUMP_VY -7
+#define PLAYER_BOUNCE_VY -4
+#define PLAYER_GRAVITY_STEP 2
+#define PLAYER_BOUNCE_GRAVITY_STEP 6
+#define PLAYER_MAX_FALL 6
+#define PLAYER_BOUNCE_MAX_FALL 2
 #define ENEMY_HURT_X 7
 #define ENEMY_HURT_Y 5
 #define ENEMY_HURT_W 10
@@ -103,6 +109,8 @@ typedef struct
     u8 punchTimer;
     u8 attackPose;
     u8 climbPose;
+    u8 landTimer;
+    u8 gravityTimer;
     AttackBox attack;
     bool walking;
     bool grounded;
@@ -716,6 +724,7 @@ static void updatePlayerSprite(void)
     SPR_setPalette(playerSprite, pal);
     if (player.punching) spriteFrame += player.attackPose;
     else if (!player.grounded && getClimbContact().active) spriteFrame += player.climbPose;
+    else if (player.landTimer > 0) spriteFrame += (player.landTimer & 4) ? POSE_WALK_A : POSE_WALK_B;
     else if (player.walking) spriteFrame += (frame & 8) ? POSE_WALK_A : POSE_WALK_B;
     SPR_setFrame(playerSprite, spriteFrame);
     SPR_setHFlip(playerSprite, player.dir < 0);
@@ -875,6 +884,8 @@ static void startCity(void)
     player.punchTimer = 0;
     player.attackPose = POSE_PUNCH;
     player.climbPose = POSE_CLIMB_UP;
+    player.landTimer = 0;
+    player.gravityTimer = 0;
     player.walking = FALSE;
     player.grounded = TRUE;
     playerHealth = PLAYER_MAX_HEALTH;
@@ -1077,6 +1088,8 @@ static AttackBox getAttackBox(u16 joy)
 
 static void updateThreats(void)
 {
+    const bool tailBouncing = (JOY_readJoypad(JOY_1) & BUTTON_A) && !player.grounded;
+
     if ((frame & 191) == 0) spawnEnemy();
     if ((frame & 511) == 128) spawnTank();
     if ((frame % 768) == 256) spawnHelicopter();
@@ -1109,7 +1122,16 @@ static void updateThreats(void)
 
         if (playerHitsRect(e->x + ENEMY_HURT_X, e->y + ENEMY_HURT_Y, ENEMY_HURT_W, ENEMY_HURT_H))
         {
-            hitPlayer();
+            if (tailBouncing)
+            {
+                spawnExplosion(e->x, e->y);
+                score += 50;
+                playTone(42, 12);
+            }
+            else
+            {
+                hitPlayer();
+            }
             e->active = FALSE;
         }
     }
@@ -1150,7 +1172,17 @@ static void updateThreats(void)
 
         if (playerHitsRect(t->x + ENEMY_HURT_X, t->y + ENEMY_HURT_Y, ENEMY_HURT_W + 4, ENEMY_HURT_H))
         {
-            hitPlayer();
+            if (tailBouncing)
+            {
+                spawnExplosion(t->x, t->y);
+                t->active = FALSE;
+                score += 100;
+                playTone(36, 14);
+            }
+            else
+            {
+                hitPlayer();
+            }
         }
     }
 
@@ -1518,6 +1550,8 @@ static void updatePlayer(u16 joy, u16 pressed)
     bool climbing;
     bool onRoof;
     bool moved = FALSE;
+    bool bounce = FALSE;
+    const bool bouncing = (joy & BUTTON_A) && !player.grounded;
 
     if (joy & BUTTON_LEFT)
     {
@@ -1534,8 +1568,8 @@ static void updatePlayer(u16 joy, u16 pressed)
 
     climbContact = getClimbContact();
     roofContact = getRoofContact();
-    onFacade = climbContact.active && player.y < PLAYER_GROUND_Y && !roofContact.active;
-    climbing = (joy & BUTTON_UP) && climbContact.active;
+    onFacade = !bouncing && climbContact.active && player.y < PLAYER_GROUND_Y && !roofContact.active;
+    climbing = !bouncing && (joy & BUTTON_UP) && climbContact.active;
     onRoof = roofContact.active && !onFacade && !climbing;
 
     if (onRoof)
@@ -1586,7 +1620,9 @@ static void updatePlayer(u16 joy, u16 pressed)
     }
     if ((pressed & BUTTON_A) && player.grounded)
     {
-        player.vy = -8;
+        player.vy = PLAYER_JUMP_VY;
+        player.gravityTimer = 0;
+        player.landTimer = 0;
         player.grounded = FALSE;
         playTone(210, 5);
     }
@@ -1615,19 +1651,34 @@ static void updatePlayer(u16 joy, u16 pressed)
     if (!player.grounded && !onFacade && !climbing && !onRoof)
     {
         player.y += player.vy;
-        player.vy++;
+        player.gravityTimer++;
+        const bool airBounce = (joy & BUTTON_A) != 0;
+        const u8 gravityStep = airBounce ? PLAYER_BOUNCE_GRAVITY_STEP : PLAYER_GRAVITY_STEP;
+        const s16 maxFall = airBounce ? PLAYER_BOUNCE_MAX_FALL : PLAYER_MAX_FALL;
+
+        if (player.gravityTimer >= gravityStep)
+        {
+            player.gravityTimer = 0;
+            if (player.vy < maxFall) player.vy++;
+        }
         roofContact = getRoofContact();
         if (roofContact.active && player.vy >= 0)
         {
             player.y = roofContact.y;
             player.vy = 0;
             player.grounded = TRUE;
+            player.landTimer = 12;
+            playTone(180, 4);
+            bounce = (joy & BUTTON_A) != 0;
         }
         else if (player.y >= PLAYER_GROUND_Y)
         {
             player.y = PLAYER_GROUND_Y;
             player.vy = 0;
             player.grounded = TRUE;
+            player.landTimer = 12;
+            playTone(180, 4);
+            bounce = (joy & BUTTON_A) != 0;
         }
     }
     else if (!climbing && !onRoof && player.y < PLAYER_GROUND_Y && !getClimbContact().active)
@@ -1643,6 +1694,16 @@ static void updatePlayer(u16 joy, u16 pressed)
     {
         player.punchTimer--;
         if (player.punchTimer == 0) player.punching = FALSE;
+    }
+    if (player.landTimer > 0) player.landTimer--;
+
+    if (bounce && player.grounded)
+    {
+        player.vy = PLAYER_BOUNCE_VY;
+        player.gravityTimer = 0;
+        player.grounded = FALSE;
+        player.landTimer = 0;
+        playTone(220, 4);
     }
 }
 
