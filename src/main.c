@@ -10,7 +10,7 @@
 #define MAX_BUILDINGS 5
 #define MAX_MONSTERS 3
 #define MAX_ENEMIES 3
-#define MAX_TANKS 2
+#define MAX_TANKS 3
 #define MAX_HELIS 2
 #define MAX_SHOTS 10
 #define MAX_PEOPLE 8
@@ -19,9 +19,12 @@
 #define MAX_WINDOW_PEOPLE 4
 #define CITY_GAVLE 6
 #define CITY_SUNDSVALL 7
+#define CITY_UMEA 8
 #define GAVLE_GOAT_INDEX 1
 #define GAVLE_ARSONIST_SPAWN_FRAMES 900
 #define GAVLE_ARSONIST_IGNITE_FRAMES 150
+#define UMEA_EPA_MUSIC_FRAMES 32
+#define UMEA_CHURCH_DAMAGE_BONUS 18
 #define SUNDSVALL_BRIDGE_STRESS_FRAMES 120
 #define SUNDSVALL_BRIDGE_SEGMENTS 6
 #define SUNDSVALL_BRIDGE_SEGMENT_W 7
@@ -908,6 +911,15 @@ static void initBuildings(void)
             buildings[i].w = sw[i];
             buildings[i].h = sh[i];
         }
+        if (currentCity == CITY_UMEA)
+        {
+            const s16 sx[MAX_BUILDINGS] = {3, 9, 22, 29, 35};
+            const u8 sw[MAX_BUILDINGS] = {5, 16, 5, 5, 4};
+            const u8 sh[MAX_BUILDINGS] = {11, 11, 18, 12, 10};
+            buildings[i].x = sx[i];
+            buildings[i].w = sw[i];
+            buildings[i].h = sh[i];
+        }
         if (currentCity == 0 && i == 1)
         {
             buildings[i].h = 16;
@@ -925,7 +937,7 @@ static void initBuildings(void)
         {
             buildings[i].y = SUNDSVALL_BRIDGE_Y - buildings[i].h;
         }
-        if (((currentCity == 0 || currentCity == 1 || currentCity == 2 || currentCity == 4 || currentCity == 5 || currentCity == CITY_GAVLE) && i == 1) || (currentCity == 3 && i == 2))
+        if (((currentCity == 0 || currentCity == 1 || currentCity == 2 || currentCity == 4 || currentCity == 5 || currentCity == CITY_GAVLE || currentCity == CITY_UMEA) && i == 1) || (currentCity == 3 && i == 2))
         {
             buildings[i].y = FLOOR_Y - buildings[i].h;
         }
@@ -936,6 +948,10 @@ static void initBuildings(void)
         if (currentCity == 5 && (i == 2 || i == 3))
         {
             buildings[i].y = buildings[1].y - buildings[i].h;
+        }
+        if (currentCity == CITY_UMEA && i == 2)
+        {
+            buildings[i].y = FLOOR_Y - buildings[i].h;
         }
         buildings[i].damage = 0;
         for (u8 d = 0; d < MAX_DAMAGE_MARKS; d++)
@@ -1114,12 +1130,12 @@ static bool isCityHallTowerBuilding(const Building *b)
 
 static bool isCathedralBodyBuilding(const Building *b)
 {
-    return currentCity == 5 && b == &buildings[1];
+    return (currentCity == 5 || currentCity == CITY_UMEA) && b == &buildings[1];
 }
 
 static bool isCathedralTowerBuilding(const Building *b)
 {
-    return currentCity == 5 && (b == &buildings[2] || b == &buildings[3]);
+    return (currentCity == 5 && (b == &buildings[2] || b == &buildings[3])) || (currentCity == CITY_UMEA && b == &buildings[2]);
 }
 
 static bool isGavleGoatBuilding(const Building *b)
@@ -1129,7 +1145,7 @@ static bool isGavleGoatBuilding(const Building *b)
 
 static u8 buildingBaseY(const Building *b)
 {
-    if (isCityHallTowerBuilding(b) || isCathedralTowerBuilding(b)) return buildings[1].y;
+    if (isCityHallTowerBuilding(b) || (isCathedralTowerBuilding(b) && currentCity != CITY_UMEA)) return buildings[1].y;
     if (currentCity == CITY_SUNDSVALL) return SUNDSVALL_BRIDGE_Y;
     return FLOOR_Y;
 }
@@ -1165,6 +1181,7 @@ static s16 climbTopYForBuilding(const Building *b)
 static u8 buildingDamageLimit(const Building *b)
 {
     if (isGavleGoatBuilding(b)) return b->h + 8;
+    if (currentCity == CITY_UMEA && (isCathedralBodyBuilding(b) || isCathedralTowerBuilding(b))) return b->h + UMEA_CHURCH_DAMAGE_BONUS;
     return b->h + ((isCityHallBuilding(b) || isCityHallTowerBuilding(b) || isCathedralBodyBuilding(b) || isCathedralTowerBuilding(b)) ? 8 : 2);
 }
 
@@ -2132,7 +2149,8 @@ static void updateThreatSprites(void)
         Tank *t = &tanks[i];
         if (t->sprite == NULL)
         {
-            t->sprite = SPR_addSprite(&tank_sprite, t->x, t->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
+            const SpriteDefinition *tankDef = currentCity == CITY_UMEA ? &epa_sprite : &tank_sprite;
+            t->sprite = SPR_addSprite(tankDef, t->x, t->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
         }
         SPR_setVisibility(t->sprite, t->active ? VISIBLE : HIDDEN);
         if (t->active)
@@ -2164,7 +2182,8 @@ static void updateThreatSprites(void)
         Shot *s = &shots[i];
         if (s->sprite == NULL)
         {
-            s->sprite = SPR_addSprite(&shot_sprite, s->x, s->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
+            const SpriteDefinition *shotDef = currentCity == CITY_UMEA ? &beer_can_sprite : &shot_sprite;
+            s->sprite = SPR_addSprite(shotDef, s->x, s->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
         }
         SPR_setVisibility(s->sprite, s->active ? VISIBLE : HIDDEN);
         if (s->active) SPR_setPosition(s->sprite, s->x, s->y);
@@ -2353,8 +2372,9 @@ static void spawnTank(void)
             tanks[i].x = fromRight ? 320 : -24;
             tanks[i].y = groundActorY();
             tanks[i].speed = fromRight ? -1 : 1;
+            if (currentCity == CITY_UMEA) tanks[i].speed *= 2;
             tanks[i].stepTimer = 0;
-            tanks[i].cooldown = 120;
+            tanks[i].cooldown = currentCity == CITY_UMEA ? 38 + ((frame + i) & 31) : 120;
             tanks[i].waterTimer = 0;
             tanks[i].active = TRUE;
             return;
@@ -2600,9 +2620,19 @@ static void updateThreats(void)
 {
     const bool tailBouncing = (JOY_readJoypad(JOY_1) & BUTTON_A) && !player.grounded;
 
-    if ((frame & 191) == 0) spawnEnemy();
-    if ((frame & 511) == 128) spawnTank();
-    if ((frame % 768) == 256) spawnHelicopter();
+    if (currentCity == CITY_UMEA)
+    {
+        if ((frame & 63) == 0) spawnEnemy();
+        if ((frame & 127) == 32 || (frame & 255) == 160) spawnTank();
+        if ((frame % 512) == 256) spawnHelicopter();
+        if ((frame & (UMEA_EPA_MUSIC_FRAMES - 1)) == 0) playTone(96 + (((frame >> 5) & 3) * 18), 3);
+    }
+    else
+    {
+        if ((frame & 191) == 0) spawnEnemy();
+        if ((frame & 511) == 128) spawnTank();
+        if ((frame % 768) == 256) spawnHelicopter();
+    }
     if (currentCity == CITY_GAVLE && (frame % GAVLE_ARSONIST_SPAWN_FRAMES) == 240) spawnTorchGuy();
 
     for (u8 i = 0; i < MAX_ENEMIES; i++)
@@ -2706,8 +2736,9 @@ static void updateThreats(void)
         if (t->cooldown == 0)
         {
             const s16 dx = (player.x < t->x) ? -1 : 1;
-            spawnShot(t->x + 10, t->y - 2, dx, -1);
-            t->cooldown = 150;
+            const s16 dy = currentCity == CITY_UMEA ? ((player.y + PLAYER_H / 2) < t->y ? -1 : 0) : -1;
+            spawnShot(t->x + 10, t->y - 2, dx, dy);
+            t->cooldown = currentCity == CITY_UMEA ? 54 : 150;
         }
 
         if (player.punching && rectsOverlap(player.attack.x, player.attack.y, player.attack.w, player.attack.h, t->x, t->y, 24, 16))

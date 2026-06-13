@@ -28,9 +28,11 @@
   "objects": [
     {"name": "enemy", "source": "art/source/objects/enemy.png", "out": "res/images/enemy.png", "frame_width": 24, "frame_height": 16, "frames": 4},
     {"name": "tank", "source": "art/source/objects/tank.png", "out": "res/images/tank.png", "frame_width": 24, "frame_height": 16, "frames": 4},
+    {"name": "epa", "source": "art/source/objects/epa.png", "out": "res/images/epa.png", "frame_width": 24, "frame_height": 16, "frames": 4},
     {"name": "helicopter", "source": "art/source/objects/helicopter.png", "out": "res/images/helicopter.png", "frame_width": 32, "frame_height": 16, "frames": 4},
     {"name": "person", "source": "art/source/objects/person.png", "out": "res/images/person.png", "frame_width": 8, "frame_height": 16, "frames": 4},
     {"name": "shot", "source": "art/source/objects/shot.png", "out": "res/images/shot.png", "frame_width": 8, "frame_height": 8, "frames": 1},
+    {"name": "beer_can", "source": "art/source/objects/beer_can.png", "out": "res/images/beer_can.png", "frame_width": 8, "frame_height": 8, "frames": 1},
     {"name": "explosion", "source": "art/source/objects/explosion.png", "out": "res/images/explosion.png", "frame_width": 16, "frame_height": 16, "frames": 2}
   ]
 }
