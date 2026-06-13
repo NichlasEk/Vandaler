@@ -1,7 +1,7 @@
 {
   "palette_colors": 16,
-  "tile_count": 85,
-  "unique_tile_count": 85,
+  "tile_count": 98,
+  "unique_tile_count": 97,
   "tiles": [
     {
       "name": "tileSky",
@@ -668,6 +668,112 @@
         4,
         11,
         13
+      ]
+    },
+    {
+      "name": "tileCathedralBrick",
+      "used_indices": [
+        7,
+        10
+      ]
+    },
+    {
+      "name": "tileCathedralLancet",
+      "used_indices": [
+        7,
+        9,
+        11,
+        13,
+        15
+      ]
+    },
+    {
+      "name": "tileCathedralRose",
+      "used_indices": [
+        7,
+        9,
+        11,
+        13
+      ]
+    },
+    {
+      "name": "tileCathedralPortal",
+      "used_indices": [
+        0,
+        7,
+        9,
+        11
+      ]
+    },
+    {
+      "name": "tileCathedralPortalLeft",
+      "used_indices": [
+        0,
+        7,
+        9,
+        11
+      ]
+    },
+    {
+      "name": "tileCathedralPortalRight",
+      "used_indices": [
+        0,
+        7,
+        9,
+        11
+      ]
+    },
+    {
+      "name": "tileCathedralPortalTop",
+      "used_indices": [
+        7,
+        9,
+        11
+      ]
+    },
+    {
+      "name": "tileCathedralRoof",
+      "used_indices": [
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileCathedralSpireLeft",
+      "used_indices": [
+        0,
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileCathedralSpireMid",
+      "used_indices": [
+        0,
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileCathedralSpireRight",
+      "used_indices": [
+        0,
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileCathedralSpireCapLeft",
+      "used_indices": [
+        0,
+        11
+      ]
+    },
+    {
+      "name": "tileCathedralSpireCapRight",
+      "used_indices": [
+        0,
+        11
       ]
     }
   ]

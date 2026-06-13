@@ -158,6 +158,19 @@
 #define TILE_CITY_HALL_TOP    (TILE_USER_INDEX + 83)
 #define TILE_CITY_HALL_CROWNS (TILE_USER_INDEX + 84)
 #define TILE_CITY_HALL_SPIRE  (TILE_USER_INDEX + 85)
+#define TILE_CATHEDRAL_BRICK  (TILE_USER_INDEX + 86)
+#define TILE_CATHEDRAL_LANCET (TILE_USER_INDEX + 87)
+#define TILE_CATHEDRAL_ROSE   (TILE_USER_INDEX + 88)
+#define TILE_CATHEDRAL_PORTAL (TILE_USER_INDEX + 89)
+#define TILE_CATHEDRAL_ROOF   (TILE_USER_INDEX + 90)
+#define TILE_CATHEDRAL_SPIRE_LEFT (TILE_USER_INDEX + 91)
+#define TILE_CATHEDRAL_SPIRE_MID (TILE_USER_INDEX + 92)
+#define TILE_CATHEDRAL_SPIRE_RIGHT (TILE_USER_INDEX + 93)
+#define TILE_CATHEDRAL_PORTAL_LEFT (TILE_USER_INDEX + 94)
+#define TILE_CATHEDRAL_PORTAL_RIGHT (TILE_USER_INDEX + 95)
+#define TILE_CATHEDRAL_PORTAL_TOP (TILE_USER_INDEX + 96)
+#define TILE_CATHEDRAL_SPIRE_CAP_LEFT (TILE_USER_INDEX + 97)
+#define TILE_CATHEDRAL_SPIRE_CAP_RIGHT (TILE_USER_INDEX + 98)
 
 typedef enum
 {
@@ -392,6 +405,7 @@ static bool selectOverlayVisible = FALSE;
 
 static ClimbContact getClimbContact(void);
 static RoofContact getRoofContact(void);
+static u8 buildingBaseY(const Building *b);
 static void loadTiles(void);
 static void hidePlayerSprite(void);
 static void hideThreatSprites(void);
@@ -583,6 +597,19 @@ static void loadTiles(void)
     VDP_loadTileData(tileCityHallTop, TILE_CITY_HALL_TOP, 1, DMA);
     VDP_loadTileData(tileCityHallCrowns, TILE_CITY_HALL_CROWNS, 1, DMA);
     VDP_loadTileData(tileCityHallSpire, TILE_CITY_HALL_SPIRE, 1, DMA);
+    VDP_loadTileData(tileCathedralBrick, TILE_CATHEDRAL_BRICK, 1, DMA);
+    VDP_loadTileData(tileCathedralLancet, TILE_CATHEDRAL_LANCET, 1, DMA);
+    VDP_loadTileData(tileCathedralRose, TILE_CATHEDRAL_ROSE, 1, DMA);
+    VDP_loadTileData(tileCathedralPortal, TILE_CATHEDRAL_PORTAL, 1, DMA);
+    VDP_loadTileData(tileCathedralRoof, TILE_CATHEDRAL_ROOF, 1, DMA);
+    VDP_loadTileData(tileCathedralSpireLeft, TILE_CATHEDRAL_SPIRE_LEFT, 1, DMA);
+    VDP_loadTileData(tileCathedralSpireMid, TILE_CATHEDRAL_SPIRE_MID, 1, DMA);
+    VDP_loadTileData(tileCathedralSpireRight, TILE_CATHEDRAL_SPIRE_RIGHT, 1, DMA);
+    VDP_loadTileData(tileCathedralPortalLeft, TILE_CATHEDRAL_PORTAL_LEFT, 1, DMA);
+    VDP_loadTileData(tileCathedralPortalRight, TILE_CATHEDRAL_PORTAL_RIGHT, 1, DMA);
+    VDP_loadTileData(tileCathedralPortalTop, TILE_CATHEDRAL_PORTAL_TOP, 1, DMA);
+    VDP_loadTileData(tileCathedralSpireCapLeft, TILE_CATHEDRAL_SPIRE_CAP_LEFT, 1, DMA);
+    VDP_loadTileData(tileCathedralSpireCapRight, TILE_CATHEDRAL_SPIRE_CAP_RIGHT, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -745,6 +772,24 @@ static void initBuildings(void)
             buildings[i].w = 4;
             buildings[i].h = 10;
         }
+        if (currentCity == 5 && i == 1)
+        {
+            buildings[i].x = 9;
+            buildings[i].w = 18;
+            buildings[i].h = 10;
+        }
+        if (currentCity == 5 && i == 2)
+        {
+            buildings[i].x = 9;
+            buildings[i].w = 4;
+            buildings[i].h = 9;
+        }
+        if (currentCity == 5 && i == 3)
+        {
+            buildings[i].x = 23;
+            buildings[i].w = 4;
+            buildings[i].h = 9;
+        }
         if (currentCity == 0 && i == 1)
         {
             buildings[i].h = 16;
@@ -758,11 +803,15 @@ static void initBuildings(void)
             buildings[i].h = 16;
         }
         buildings[i].y = FLOOR_Y - hs[i];
-        if (((currentCity == 0 || currentCity == 1 || currentCity == 2 || currentCity == 4) && i == 1) || (currentCity == 3 && i == 2))
+        if (((currentCity == 0 || currentCity == 1 || currentCity == 2 || currentCity == 4 || currentCity == 5) && i == 1) || (currentCity == 3 && i == 2))
         {
             buildings[i].y = FLOOR_Y - buildings[i].h;
         }
         if (currentCity == 4 && i == 2)
+        {
+            buildings[i].y = buildings[1].y - buildings[i].h;
+        }
+        if (currentCity == 5 && (i == 2 || i == 3))
         {
             buildings[i].y = buildings[1].y - buildings[i].h;
         }
@@ -775,8 +824,8 @@ static void initBuildings(void)
         for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
         {
             const u8 col = 1 + ((p & 1) * 2);
-            const u8 row = (currentCity == 1 && i == 1) ? 7 + ((p / 2) * 3) : ((currentCity == 2 && i == 1) ? 2 : ((currentCity == 3 && i == 2) ? 5 + ((p / 2) * 3) : ((currentCity == 4 && i == 1) ? 3 + ((p / 2) * 3) : 1 + ((p / 2) * 2))));
-            const u8 personCol = (currentCity == 2 && i == 1) ? 1 + p : ((currentCity == 4 && i == 1) ? 2 + (p * 3) : col);
+            const u8 row = (currentCity == 1 && i == 1) ? 7 + ((p / 2) * 3) : ((currentCity == 2 && i == 1) ? 2 : ((currentCity == 3 && i == 2) ? 5 + ((p / 2) * 3) : (((currentCity == 4 || currentCity == 5) && i == 1) ? 3 + ((p / 2) * 3) : 1 + ((p / 2) * 2))));
+            const u8 personCol = (currentCity == 2 && i == 1) ? 1 + p : (((currentCity == 4 || currentCity == 5) && i == 1) ? 2 + (p * 3) : col);
             buildings[i].personX[p] = buildings[i].x + (personCol < buildings[i].w ? personCol : 1);
             buildings[i].personY[p] = buildings[i].y + (row < buildings[i].h ? row : 1);
             buildings[i].personAlive[p] = (buildings[i].personY[p] < FLOOR_Y - 1);
@@ -819,12 +868,13 @@ static void drawCollapseDust(const Building *b, u8 y, u8 phase)
 
 static void drawBuildingCracks(const Building *b, u8 visibleH)
 {
+    const u8 baseY = buildingBaseY(b);
     const u8 waveRows = b->crackRows > (b->h - 2) ? b->h - 2 : b->crackRows;
-    const u8 waveTop = (FLOOR_Y - 1 > waveRows) ? FLOOR_Y - 1 - waveRows : b->y;
+    const u8 waveTop = (baseY - 1 > waveRows) ? baseY - 1 - waveRows : b->y;
 
     if (waveRows == 0) return;
 
-    for (u8 yy = waveTop; yy < FLOOR_Y && yy < b->y + visibleH; yy++)
+    for (u8 yy = waveTop; yy < baseY && yy < b->y + visibleH; yy++)
     {
         const u8 rel = yy - b->y;
         if (rel == 0 || rel >= visibleH) continue;
@@ -939,6 +989,22 @@ static bool isCityHallTowerBuilding(const Building *b)
     return currentCity == 4 && b == &buildings[2];
 }
 
+static bool isCathedralBodyBuilding(const Building *b)
+{
+    return currentCity == 5 && b == &buildings[1];
+}
+
+static bool isCathedralTowerBuilding(const Building *b)
+{
+    return currentCity == 5 && (b == &buildings[2] || b == &buildings[3]);
+}
+
+static u8 buildingBaseY(const Building *b)
+{
+    if (isCityHallTowerBuilding(b) || isCathedralTowerBuilding(b)) return buildings[1].y;
+    return FLOOR_Y;
+}
+
 static s16 climbTopYForBuilding(const Building *b)
 {
     const u8 topRow = isOldWaterTowerBuilding(b) ? b->y + 3 : (isMushroomBuilding(b) ? b->y + 5 : (isFridnasBuilding(b) ? b->y + 4 : b->y));
@@ -947,7 +1013,7 @@ static s16 climbTopYForBuilding(const Building *b)
 
 static u8 buildingDamageLimit(const Building *b)
 {
-    return b->h + ((isCityHallBuilding(b) || isCityHallTowerBuilding(b)) ? 8 : 2);
+    return b->h + ((isCityHallBuilding(b) || isCityHallTowerBuilding(b) || isCathedralBodyBuilding(b) || isCathedralTowerBuilding(b)) ? 8 : 2);
 }
 
 static bool isBehindStandingCityHall(const Building *b, s16 facadeX)
@@ -964,6 +1030,96 @@ static bool isBehindStandingCityHall(const Building *b, s16 facadeX)
     const s16 bBottom = (b->y + b->h) * 8;
 
     return facadeX >= hallLeft && facadeX <= hallRight && bBottom > hallTop;
+}
+
+static bool isBehindStandingCathedral(const Building *b, s16 facadeX)
+{
+    if (currentCity != 5) return FALSE;
+    if (isCathedralBodyBuilding(b) || isCathedralTowerBuilding(b)) return FALSE;
+
+    const Building *body = &buildings[1];
+    if (!body->alive || body->collapsing) return FALSE;
+
+    const s16 bodyLeft = body->x * 8;
+    const s16 bodyRight = (body->x + body->w) * 8;
+    const s16 bodyTop = body->y * 8;
+    const s16 bBottom = (b->y + b->h) * 8;
+
+    return facadeX >= bodyLeft && facadeX <= bodyRight && bBottom > bodyTop;
+}
+
+static bool isOccludedByStandingCathedral(const Building *b)
+{
+    if (currentCity != 5) return FALSE;
+    if (isCathedralBodyBuilding(b) || isCathedralTowerBuilding(b)) return FALSE;
+
+    const Building *body = &buildings[1];
+    if (!body->alive || body->collapsing) return FALSE;
+
+    const s16 bodyLeft = body->x * 8;
+    const s16 bodyRight = (body->x + body->w) * 8;
+    const s16 bodyTop = body->y * 8;
+    const s16 bLeft = b->x * 8;
+    const s16 bRight = (b->x + b->w) * 8;
+    const s16 bBottom = (b->y + b->h) * 8;
+
+    return bRight > bodyLeft && bLeft < bodyRight && bBottom > bodyTop;
+}
+
+static bool isOnStandingCathedralRoof(void)
+{
+    if (currentCity != 5) return FALSE;
+
+    const Building *body = &buildings[1];
+    if (!body->alive || body->collapsing) return FALSE;
+
+    const s16 center = player.x + (PLAYER_W / 2);
+    const s16 feet = player.y + PLAYER_H;
+    const s16 bodyLeft = body->x * 8;
+    const s16 bodyRight = (body->x + body->w) * 8;
+    const s16 bodyTop = body->y * 8;
+
+    return center >= bodyLeft && center <= bodyRight && feet >= bodyTop - 8 && feet <= bodyTop + 10;
+}
+
+static bool isInsideStandingCathedralFront(void)
+{
+    if (currentCity != 5) return FALSE;
+
+    const Building *body = &buildings[1];
+    if (!body->alive || body->collapsing) return FALSE;
+
+    const s16 bodyLeft = body->x * 8;
+    const s16 bodyRight = (body->x + body->w) * 8;
+    const s16 bodyTop = body->y * 8;
+    const s16 bodyBottom = FLOOR_Y * 8;
+    const s16 playerLeft = player.x;
+    const s16 playerRight = player.x + PLAYER_W;
+    const s16 playerTop = player.y;
+    const s16 playerFeet = player.y + PLAYER_H;
+
+    return playerRight > bodyLeft && playerLeft < bodyRight && playerFeet > bodyTop && playerTop < bodyBottom;
+}
+
+static bool isClimbContactHiddenByLaterBuilding(u8 buildingIndex, s16 facadeX, s16 top, s16 feet)
+{
+    for (u8 i = buildingIndex + 1; i < MAX_BUILDINGS; i++)
+    {
+        const Building *front = &buildings[i];
+        if (!front->alive) continue;
+        if (front->collapsing) continue;
+
+        const s16 frontLeft = front->x * 8;
+        const s16 frontRight = (front->x + front->w) * 8;
+        const s16 frontTop = front->y * 8;
+        const s16 frontBottom = buildingBaseY(front) * 8;
+
+        if (facadeX < frontLeft || facadeX > frontRight) continue;
+        if (feet <= frontTop || top >= frontBottom) continue;
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 static void drawTurningTorsoBuilding(const Building *b, u8 visibleH, u8 drawY)
@@ -1234,6 +1390,92 @@ static void drawCityHallTowerBuilding(const Building *b, u8 visibleH, u8 drawY)
     }
 }
 
+static void drawCathedralBodyBuilding(const Building *b, u8 visibleH, u8 drawY)
+{
+    for (u8 yy = 0; yy < visibleH; yy++)
+    {
+        const u8 worldY = drawY + yy;
+        const u8 rel = worldY - b->y;
+
+        if (rel == 0)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_CATHEDRAL_ROOF), b->x, worldY, b->w, 1);
+            continue;
+        }
+
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_CATHEDRAL_BRICK), b->x, worldY, b->w, 1);
+        if (rel == 2 || rel == 3)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_LANCET), b->x + 3, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_LANCET), b->x + 14, worldY);
+        }
+        if (rel == 4 || rel == 5)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_ROSE), b->x + 8, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_ROSE), b->x + 9, worldY);
+        }
+        if (rel == visibleH - 4)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_PORTAL_LEFT), b->x + 7, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_PORTAL_TOP), b->x + 8, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_PORTAL_TOP), b->x + 9, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_PORTAL_RIGHT), b->x + 10, worldY);
+        }
+        if (rel == visibleH - 3 || rel == visibleH - 2)
+        {
+            if (rel == visibleH - 3) VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_PORTAL_LEFT), b->x + 7, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_PORTAL), b->x + 8, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_PORTAL), b->x + 9, worldY);
+            if (rel == visibleH - 3) VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_PORTAL_RIGHT), b->x + 10, worldY);
+        }
+        if (rel == visibleH - 1)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_FRIDNAS_STONE), b->x, worldY, b->w, 1);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_PORTAL), b->x + 8, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_PORTAL), b->x + 9, worldY);
+        }
+    }
+}
+
+static void drawCathedralTowerBuilding(const Building *b, u8 visibleH, u8 drawY)
+{
+    for (u8 yy = 0; yy < visibleH; yy++)
+    {
+        const u8 worldY = drawY + yy;
+        const u8 rel = worldY - b->y;
+
+        if (rel == 0)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_SPIRE_CAP_LEFT), b->x + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_SPIRE_CAP_RIGHT), b->x + 2, worldY);
+            continue;
+        }
+        if (rel == 1)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_SPIRE_CAP_LEFT), b->x, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_SPIRE_MID), b->x + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_SPIRE_MID), b->x + 2, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_SPIRE_CAP_RIGHT), b->x + 3, worldY);
+            continue;
+        }
+        if (rel == 2 || rel == 3)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_SPIRE_LEFT), b->x, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_SPIRE_MID), b->x + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_SPIRE_MID), b->x + 2, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_SPIRE_RIGHT), b->x + 3, worldY);
+            continue;
+        }
+
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_CATHEDRAL_BRICK), b->x, worldY, b->w, 1);
+        if (rel > 5 && rel < visibleH - 1 && (rel & 1) == 0)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_LANCET), b->x + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CATHEDRAL_LANCET), b->x + 2, worldY);
+        }
+    }
+}
+
 static void drawBuilding(const Building *b)
 {
     if (!b->alive && !b->collapsing) return;
@@ -1242,7 +1484,7 @@ static void drawBuilding(const Building *b)
     const u8 drawY = b->collapsing ? b->y + b->collapseRows : b->y;
     if (visibleH == 0)
     {
-        drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+        drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
         return;
     }
 
@@ -1255,7 +1497,7 @@ static void drawBuilding(const Building *b)
         drawTurningTorsoBuilding(b, visibleH, drawY);
         drawBuildingChunks(b, visibleH, drawY);
         if (b->cracking) drawBuildingCracks(b, visibleH);
-        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+        if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
 
         for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
         {
@@ -1271,7 +1513,7 @@ static void drawBuilding(const Building *b)
         drawOldWaterTowerBuilding(b, visibleH, drawY);
         drawBuildingChunks(b, visibleH, drawY);
         if (b->cracking) drawBuildingCracks(b, visibleH);
-        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+        if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
 
         for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
         {
@@ -1287,7 +1529,7 @@ static void drawBuilding(const Building *b)
         drawMushroomBuilding(b, visibleH, drawY);
         drawBuildingChunks(b, visibleH, drawY);
         if (b->cracking) drawBuildingCracks(b, visibleH);
-        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+        if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
 
         for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
         {
@@ -1303,7 +1545,7 @@ static void drawBuilding(const Building *b)
         drawFridnasBuilding(b, visibleH, drawY);
         drawBuildingChunks(b, visibleH, drawY);
         if (b->cracking) drawBuildingCracks(b, visibleH);
-        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+        if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
 
         for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
         {
@@ -1319,7 +1561,7 @@ static void drawBuilding(const Building *b)
         drawCityHallBuilding(b, visibleH, drawY);
         drawBuildingChunks(b, visibleH, drawY);
         if (b->cracking) drawBuildingCracks(b, visibleH);
-        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+        if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
 
         for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
         {
@@ -1335,7 +1577,32 @@ static void drawBuilding(const Building *b)
         drawCityHallTowerBuilding(b, visibleH, drawY);
         drawBuildingChunks(b, visibleH, drawY);
         if (b->cracking) drawBuildingCracks(b, visibleH);
-        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+        if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
+        return;
+    }
+
+    if (isCathedralBodyBuilding(b))
+    {
+        drawCathedralBodyBuilding(b, visibleH, drawY);
+        drawBuildingChunks(b, visibleH, drawY);
+        if (b->cracking) drawBuildingCracks(b, visibleH);
+        if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
+
+        for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
+        {
+            if (!b->personAlive[p]) continue;
+            if (b->personY[p] < drawY || b->personY[p] >= drawY + visibleH) continue;
+            VDP_setTileMapXY(BG_B, attr(PAL0, windowPersonTile(b, p)), b->personX[p], b->personY[p]);
+        }
+        return;
+    }
+
+    if (isCathedralTowerBuilding(b))
+    {
+        drawCathedralTowerBuilding(b, visibleH, drawY);
+        drawBuildingChunks(b, visibleH, drawY);
+        if (b->cracking) drawBuildingCracks(b, visibleH);
+        if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
         return;
     }
 
@@ -1371,7 +1638,7 @@ static void drawBuilding(const Building *b)
     }
     drawBuildingChunks(b, visibleH, drawY);
     if (b->cracking) drawBuildingCracks(b, visibleH);
-    if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+    if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
 
     for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
     {
@@ -2332,7 +2599,8 @@ static bool damageBuildingAtAttack(AttackBox attack)
         if (!rectsOverlap(attack.x, attack.y, attack.w, attack.h, bx, by, bw, bh)) continue;
 
         const s16 rawY = (attack.y + (attack.h / 2)) / 8;
-        const u8 hitY = rawY < b->y ? b->y : (rawY >= FLOOR_Y ? FLOOR_Y - 1 : rawY);
+        const u8 baseY = buildingBaseY(b);
+        const u8 hitY = rawY < b->y ? b->y : (rawY >= baseY ? baseY - 1 : rawY);
         const u8 hitX = attack.xDir > 0 ? b->x : (b->x + b->w - 1);
         applyBuildingDamage(b, hitX, hitY);
         return TRUE;
@@ -2372,7 +2640,8 @@ static void damageBuildings(ClimbContact contact, AttackBox attack)
     if ((player.y / 8) + 4 >= b->y)
     {
         const s16 rawY = (attack.y + (attack.h / 2)) / 8;
-        const u8 hitY = rawY < b->y ? b->y : (rawY >= FLOOR_Y ? FLOOR_Y - 1 : rawY);
+        const u8 baseY = buildingBaseY(b);
+        const u8 hitY = rawY < b->y ? b->y : (rawY >= baseY ? baseY - 1 : rawY);
         const u8 hitX = contact.attackDir > 0 ? b->x : (b->x + b->w - 1);
         applyBuildingDamage(b, hitX, hitY);
     }
@@ -2466,7 +2735,7 @@ static RoofContact getRoofContact(void)
         const s16 bTop = b->y * 8;
         if (!b->alive) continue;
         if (b->collapsing) continue;
-        if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b) || isFridnasBuilding(b) || isCityHallTowerBuilding(b)) continue;
+        if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b) || isFridnasBuilding(b) || isCityHallTowerBuilding(b) || isCathedralTowerBuilding(b)) continue;
         if (center < bLeft + 4 || center > bRight - 4) continue;
         if (feet < bTop - 6 || feet > bTop + 8) continue;
 
@@ -2486,10 +2755,45 @@ static ClimbContact getClimbContact(void)
     const s16 right = player.x + PLAYER_W;
     const s16 top = player.y;
     const s16 feet = player.y + PLAYER_H;
+    const bool onCathedralRoof = isOnStandingCathedralRoof();
+    const bool inCathedralFront = isInsideStandingCathedralFront();
     contact.active = FALSE;
     contact.snapX = player.x;
     contact.attackDir = player.dir;
     contact.building = MAX_BUILDINGS;
+
+    if (currentCity == 5)
+    {
+        for (u8 i = 2; i <= 3; i++)
+        {
+            const Building *b = &buildings[i];
+            const s16 bLeft = b->x * 8;
+            const s16 bRight = (b->x + b->w) * 8;
+            const s16 bTop = b->y * 8;
+            const s16 bBottom = buildingBaseY(b) * 8;
+            if (!b->alive) continue;
+            if (b->collapsing) continue;
+            if (feet < bTop - 6 || top > bBottom) continue;
+
+            if (right >= bLeft - 6 && right <= bLeft + 10)
+            {
+                contact.active = TRUE;
+                contact.snapX = bLeft - PLAYER_W + 4;
+                contact.attackDir = 1;
+                contact.building = i;
+                return contact;
+            }
+
+            if (left <= bRight + 6 && left >= bRight - 10)
+            {
+                contact.active = TRUE;
+                contact.snapX = bRight - 4;
+                contact.attackDir = -1;
+                contact.building = i;
+                return contact;
+            }
+        }
+    }
 
     for (u8 i = 0; i < MAX_BUILDINGS; i++)
     {
@@ -2497,9 +2801,12 @@ static ClimbContact getClimbContact(void)
         s16 bLeft = b->x * 8;
         s16 bRight = (b->x + b->w) * 8;
         s16 bTop = b->y * 8;
-        s16 bBottom = FLOOR_Y * 8;
+        s16 bBottom = buildingBaseY(b) * 8;
         if (!b->alive) continue;
         if (b->collapsing) continue;
+        if (inCathedralFront && !isCathedralBodyBuilding(b) && !isCathedralTowerBuilding(b)) continue;
+        if (onCathedralRoof && !isCathedralBodyBuilding(b) && !isCathedralTowerBuilding(b)) continue;
+        if (isOccludedByStandingCathedral(b)) continue;
 
         if (isMushroomBuilding(b))
         {
@@ -2507,16 +2814,13 @@ static ClimbContact getClimbContact(void)
             bRight = (b->x + 4) * 8;
             bTop = (b->y + 5) * 8;
         }
-        if (isCityHallTowerBuilding(b))
-        {
-            bBottom = (b->y + b->h) * 8;
-        }
-
         if (feet < bTop - 6 || top > bBottom) continue;
 
         if (right >= bLeft - 6 && right <= bLeft + 10)
         {
+            if (isClimbContactHiddenByLaterBuilding(i, bLeft, top, feet)) continue;
             if (isBehindStandingCityHall(b, bLeft)) continue;
+            if (isBehindStandingCathedral(b, bLeft)) continue;
             contact.active = TRUE;
             contact.snapX = bLeft - PLAYER_W + 4;
             contact.attackDir = 1;
@@ -2526,7 +2830,9 @@ static ClimbContact getClimbContact(void)
 
         if (left <= bRight + 6 && left >= bRight - 10)
         {
+            if (isClimbContactHiddenByLaterBuilding(i, bRight, top, feet)) continue;
             if (isBehindStandingCityHall(b, bRight)) continue;
+            if (isBehindStandingCathedral(b, bRight)) continue;
             contact.active = TRUE;
             contact.snapX = bRight - 4;
             contact.attackDir = -1;
@@ -2579,8 +2885,29 @@ static void updatePlayer(u16 joy, u16 pressed)
 
     climbContact = getClimbContact();
     roofContact = getRoofContact();
-    onFacade = !bouncing && climbContact.active && player.y < PLAYER_GROUND_Y && !roofContact.active;
+    const bool towerFacadeAtRoof = climbContact.active && isCathedralTowerBuilding(&buildings[climbContact.building]);
+    onFacade = !bouncing && climbContact.active && player.y < PLAYER_GROUND_Y && (!roofContact.active || towerFacadeAtRoof);
     climbing = !bouncing && (joy & BUTTON_UP) && climbContact.active;
+
+    if (towerFacadeAtRoof && roofContact.active && !climbing)
+    {
+        const Building *tower = &buildings[climbContact.building];
+        const s16 roofY = buildings[1].y * 8 - PLAYER_H;
+        const bool atTowerBase = player.y >= roofY - 8;
+        const bool stepOntoRoof =
+            (climbContact.attackDir > 0 && (joy & BUTTON_RIGHT)) ||
+            (climbContact.attackDir < 0 && (joy & BUTTON_LEFT));
+
+        if (atTowerBase && stepOntoRoof)
+        {
+            player.y = roofY;
+            player.x = climbContact.attackDir > 0 ? (tower->x * 8) + 8 : ((tower->x + tower->w) * 8) - PLAYER_W - 8;
+            player.vy = 0;
+            player.grounded = TRUE;
+            onFacade = FALSE;
+        }
+    }
+
     onRoof = roofContact.active && !onFacade && !climbing;
 
     if (onRoof)
@@ -2613,7 +2940,7 @@ static void updatePlayer(u16 joy, u16 pressed)
             player.y = climbTopY;
             player.vy = 0;
             climbing = FALSE;
-            if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b) || isFridnasBuilding(b) || isCityHallTowerBuilding(b))
+            if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b) || isFridnasBuilding(b) || isCityHallTowerBuilding(b) || isCathedralTowerBuilding(b))
             {
                 player.x = climbContact.snapX;
                 player.grounded = FALSE;

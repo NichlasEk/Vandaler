@@ -867,6 +867,136 @@
       "000B0000",
       "00040000",
       "00040000"
+    ],
+    "tileCathedralBrick": [
+      "77777777",
+      "7A7777A7",
+      "77777777",
+      "777A7777",
+      "77A77777",
+      "777777A7",
+      "A7777777",
+      "7777A777"
+    ],
+    "tileCathedralLancet": [
+      "777BB777",
+      "77B99B77",
+      "7B9FF9B7",
+      "7B9FF9B7",
+      "7B9DD9B7",
+      "7B9999B7",
+      "77BBBB77",
+      "77777777"
+    ],
+    "tileCathedralRose": [
+      "77BBBB77",
+      "7B9DD9B7",
+      "B9D99D9B",
+      "BD9999DB",
+      "BD9999DB",
+      "B9D99D9B",
+      "7B9DD9B7",
+      "77BBBB77"
+    ],
+    "tileCathedralPortal": [
+      "77BBBB77",
+      "7B9999B7",
+      "B999999B",
+      "B99BB99B",
+      "B9BBBB9B",
+      "B9B00B9B",
+      "B9B00B9B",
+      "BBBBBBBB"
+    ],
+    "tileCathedralPortalLeft": [
+      "77777BBB",
+      "777BB999",
+      "77B99999",
+      "7B9999B9",
+      "B9999BB9",
+      "B999B009",
+      "B99B0009",
+      "BBBBBBBB"
+    ],
+    "tileCathedralPortalRight": [
+      "BBB77777",
+      "999BB777",
+      "99999B77",
+      "9B9999B7",
+      "9BB9999B",
+      "900B999B",
+      "9000B99B",
+      "BBBBBBBB"
+    ],
+    "tileCathedralPortalTop": [
+      "77777777",
+      "777BB777",
+      "77B99B77",
+      "7B9999B7",
+      "B999999B",
+      "BBBBBBBB",
+      "99999999",
+      "77777777"
+    ],
+    "tileCathedralRoof": [
+      "BBBBBBBB",
+      "BBABBBAB",
+      "BBBBBBBB",
+      "BBAABBBB",
+      "BBBBBBBB",
+      "ABBBBABB",
+      "BBBBBBBB",
+      "AAAAAAAA"
+    ],
+    "tileCathedralSpireLeft": [
+      "0000000B",
+      "000000BB",
+      "00000BBB",
+      "0000BBBB",
+      "000BBBBB",
+      "00BBBBBB",
+      "0BBBABBB",
+      "BBBBBBBB"
+    ],
+    "tileCathedralSpireMid": [
+      "000BB000",
+      "00BBBB00",
+      "0BBBBBB0",
+      "BBBBBBBB",
+      "BBABABBB",
+      "BABBBABB",
+      "BBBBBBBB",
+      "BBBBBBBB"
+    ],
+    "tileCathedralSpireRight": [
+      "B0000000",
+      "BB000000",
+      "BBB00000",
+      "BBBB0000",
+      "BBBBB000",
+      "BBBBBB00",
+      "BBBABBB0",
+      "BBBBBBBB"
+    ],
+    "tileCathedralSpireCapLeft": [
+      "00000000",
+      "0000000B",
+      "000000BB",
+      "00000BBB",
+      "0000BBBB",
+      "000BBBBB",
+      "00BBBBBB",
+      "0BBBBBBB"
+    ],
+    "tileCathedralSpireCapRight": [
+      "00000000",
+      "B0000000",
+      "BB000000",
+      "BBB00000",
+      "BBBB0000",
+      "BBBBB000",
+      "BBBBBB00",
+      "BBBBBBB0"
     ]
   }
 }
