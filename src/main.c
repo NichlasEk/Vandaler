@@ -125,6 +125,10 @@
 #define TILE_WINDOW_PERSON_B (TILE_USER_INDEX + 50)
 #define TILE_WINDOW_PANIC_A  (TILE_USER_INDEX + 51)
 #define TILE_WINDOW_PANIC_B  (TILE_USER_INDEX + 52)
+#define TILE_TORSO_WHITE     (TILE_USER_INDEX + 53)
+#define TILE_TORSO_GLASS     (TILE_USER_INDEX + 54)
+#define TILE_TORSO_RIB       (TILE_USER_INDEX + 55)
+#define TILE_TORSO_RIB_BACK  (TILE_USER_INDEX + 56)
 
 typedef enum
 {
@@ -515,6 +519,10 @@ static void loadTiles(void)
     VDP_loadTileData(tileWindowPersonB, TILE_WINDOW_PERSON_B, 1, DMA);
     VDP_loadTileData(tileWindowPanicA, TILE_WINDOW_PANIC_A, 1, DMA);
     VDP_loadTileData(tileWindowPanicB, TILE_WINDOW_PANIC_B, 1, DMA);
+    VDP_loadTileData(tileTorsoWhite, TILE_TORSO_WHITE, 1, DMA);
+    VDP_loadTileData(tileTorsoGlass, TILE_TORSO_GLASS, 1, DMA);
+    VDP_loadTileData(tileTorsoRib, TILE_TORSO_RIB, 1, DMA);
+    VDP_loadTileData(tileTorsoRibBack, TILE_TORSO_RIB_BACK, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -659,7 +667,15 @@ static void initBuildings(void)
         buildings[i].x = xs[i];
         buildings[i].w = ws[i];
         buildings[i].h = hs[i];
+        if (currentCity == 0 && i == 1)
+        {
+            buildings[i].h = 16;
+        }
         buildings[i].y = FLOOR_Y - hs[i];
+        if (currentCity == 0 && i == 1)
+        {
+            buildings[i].y = FLOOR_Y - buildings[i].h;
+        }
         buildings[i].damage = 0;
         for (u8 d = 0; d < MAX_DAMAGE_MARKS; d++)
         {
@@ -802,6 +818,45 @@ static u8 buildingWindowTile(const Building *b, u8 xx, u8 yy)
     return buildingStyle(b) == 2 ? TILE_WIN_LIT : TILE_WIN_ON;
 }
 
+static bool isTurningTorsoBuilding(const Building *b)
+{
+    return currentCity == 0 && b == &buildings[1];
+}
+
+static void drawTurningTorsoBuilding(const Building *b, u8 visibleH, u8 drawY)
+{
+    const s8 offsets[8] = {1, 1, 0, -1, -1, 0, 1, 1};
+    const u8 widths[8] = {4, 4, 5, 5, 4, 5, 4, 3};
+
+    for (u8 yy = 0; yy < visibleH; yy++)
+    {
+        const u8 worldY = drawY + yy;
+        const u8 rel = worldY - b->y;
+        const u8 band = (rel / 2) & 7;
+        const u8 sectionTop = (rel & 1) == 0;
+        const s16 left = b->x + offsets[band];
+        const u8 torsoW = widths[band];
+        const bool ribLeft = band >= 3 && band <= 5;
+
+        if (sectionTop && !b->collapsing)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROOF_CAP), left, worldY, torsoW, 1);
+            if (ribLeft) VDP_setTileMapXY(BG_B, attr(PAL0, TILE_TORSO_RIB_BACK), left, worldY);
+            else VDP_setTileMapXY(BG_B, attr(PAL0, TILE_TORSO_RIB), left + torsoW - 1, worldY);
+            continue;
+        }
+
+        for (u8 xx = 0; xx < torsoW; xx++)
+        {
+            u8 tile = TILE_TORSO_WHITE;
+            if (ribLeft && xx == 0) tile = TILE_TORSO_RIB_BACK;
+            else if (!ribLeft && xx == torsoW - 1) tile = TILE_TORSO_RIB;
+            else if (((xx + rel) & 1) == 0) tile = TILE_TORSO_GLASS;
+            VDP_setTileMapXY(BG_B, attr(PAL0, tile), left + xx, worldY);
+        }
+    }
+}
+
 static void drawBuilding(const Building *b)
 {
     if (!b->alive && !b->collapsing) return;
@@ -817,6 +872,22 @@ static void drawBuilding(const Building *b)
     const u8 bodyTile = buildingBodyTile(b);
     const u8 accentTile = buildingAccentTile(b);
     const u8 roofTile = buildingStyle(b) == 2 ? TILE_ROOF_DARK : TILE_ROOF;
+
+    if (isTurningTorsoBuilding(b))
+    {
+        drawTurningTorsoBuilding(b, visibleH, drawY);
+        drawBuildingChunks(b, visibleH, drawY);
+        if (b->cracking) drawBuildingCracks(b, visibleH);
+        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+
+        for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
+        {
+            if (!b->personAlive[p]) continue;
+            if (b->personY[p] < drawY || b->personY[p] >= drawY + visibleH) continue;
+            VDP_setTileMapXY(BG_B, attr(PAL0, windowPersonTile(b, p)), b->personX[p], b->personY[p]);
+        }
+        return;
+    }
 
     VDP_fillTileMapRect(BG_B, attr(PAL0, bodyTile), b->x, drawY, b->w, visibleH);
     VDP_fillTileMapRect(BG_B, attr(PAL0, roofTile), b->x, drawY, b->w, 1);

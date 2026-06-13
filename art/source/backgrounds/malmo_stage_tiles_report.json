@@ -1,7 +1,7 @@
 {
   "palette_colors": 16,
-  "tile_count": 52,
-  "unique_tile_count": 52,
+  "tile_count": 56,
+  "unique_tile_count": 56,
   "tiles": [
     {
       "name": "tileSky",
@@ -409,6 +409,36 @@
         0,
         9,
         13
+      ]
+    },
+    {
+      "name": "tileTorsoWhite",
+      "used_indices": [
+        9,
+        15
+      ]
+    },
+    {
+      "name": "tileTorsoGlass",
+      "used_indices": [
+        6,
+        12
+      ]
+    },
+    {
+      "name": "tileTorsoRib",
+      "used_indices": [
+        3,
+        9,
+        15
+      ]
+    },
+    {
+      "name": "tileTorsoRibBack",
+      "used_indices": [
+        3,
+        9,
+        15
       ]
     }
   ]
