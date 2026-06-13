@@ -1,7 +1,7 @@
 {
   "palette_colors": 16,
-  "tile_count": 63,
-  "unique_tile_count": 63,
+  "tile_count": 70,
+  "unique_tile_count": 70,
   "tiles": [
     {
       "name": "tileSky",
@@ -496,6 +496,63 @@
         0,
         10,
         11
+      ]
+    },
+    {
+      "name": "tileMushroomCapLeft",
+      "used_indices": [
+        0,
+        9,
+        15
+      ]
+    },
+    {
+      "name": "tileMushroomCapMid",
+      "used_indices": [
+        0,
+        7,
+        9,
+        15
+      ]
+    },
+    {
+      "name": "tileMushroomCapRight",
+      "used_indices": [
+        0,
+        9,
+        15
+      ]
+    },
+    {
+      "name": "tileMushroomUnderside",
+      "used_indices": [
+        0,
+        7,
+        9
+      ]
+    },
+    {
+      "name": "tileMushroomStem",
+      "used_indices": [
+        0,
+        9,
+        15
+      ]
+    },
+    {
+      "name": "tileMushroomStemShade",
+      "used_indices": [
+        0,
+        9,
+        15
+      ]
+    },
+    {
+      "name": "tileMushroomAntenna",
+      "used_indices": [
+        0,
+        9,
+        15
       ]
     }
   ]

@@ -136,10 +136,18 @@
 #define TILE_WATER_ROOF_MID  (TILE_USER_INDEX + 61)
 #define TILE_WATER_ROOF_RIGHT (TILE_USER_INDEX + 62)
 #define TILE_WATER_SPIRE     (TILE_USER_INDEX + 63)
+#define TILE_MUSHROOM_CAP_LEFT (TILE_USER_INDEX + 64)
+#define TILE_MUSHROOM_CAP_MID (TILE_USER_INDEX + 65)
+#define TILE_MUSHROOM_CAP_RIGHT (TILE_USER_INDEX + 66)
+#define TILE_MUSHROOM_UNDERSIDE (TILE_USER_INDEX + 67)
+#define TILE_MUSHROOM_STEM    (TILE_USER_INDEX + 68)
+#define TILE_MUSHROOM_STEM_SHADE (TILE_USER_INDEX + 69)
+#define TILE_MUSHROOM_ANTENNA (TILE_USER_INDEX + 70)
 
 typedef enum
 {
     STATE_TITLE,
+    STATE_LEVEL_SELECT,
     STATE_SELECT,
     STATE_INTRO,
     STATE_PLAY,
@@ -354,6 +362,7 @@ static Person people[MAX_PEOPLE];
 static Explosion explosions[MAX_EXPLOSIONS];
 static u8 selectedMonster = 0;
 static u8 currentCity = 0;
+static u8 selectedCity = 0;
 static u8 playerHealth = PLAYER_MAX_HEALTH;
 static u8 invulnerableTimer = 0;
 static u16 frame = 0;
@@ -537,6 +546,13 @@ static void loadTiles(void)
     VDP_loadTileData(tileWaterRoofMid, TILE_WATER_ROOF_MID, 1, DMA);
     VDP_loadTileData(tileWaterRoofRight, TILE_WATER_ROOF_RIGHT, 1, DMA);
     VDP_loadTileData(tileWaterSpire, TILE_WATER_SPIRE, 1, DMA);
+    VDP_loadTileData(tileMushroomCapLeft, TILE_MUSHROOM_CAP_LEFT, 1, DMA);
+    VDP_loadTileData(tileMushroomCapMid, TILE_MUSHROOM_CAP_MID, 1, DMA);
+    VDP_loadTileData(tileMushroomCapRight, TILE_MUSHROOM_CAP_RIGHT, 1, DMA);
+    VDP_loadTileData(tileMushroomUnderside, TILE_MUSHROOM_UNDERSIDE, 1, DMA);
+    VDP_loadTileData(tileMushroomStem, TILE_MUSHROOM_STEM, 1, DMA);
+    VDP_loadTileData(tileMushroomStemShade, TILE_MUSHROOM_STEM_SHADE, 1, DMA);
+    VDP_loadTileData(tileMushroomAntenna, TILE_MUSHROOM_ANTENNA, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -689,8 +705,12 @@ static void initBuildings(void)
         {
             buildings[i].h = 17;
         }
+        if (currentCity == 2 && i == 1)
+        {
+            buildings[i].h = 16;
+        }
         buildings[i].y = FLOOR_Y - hs[i];
-        if ((currentCity == 0 || currentCity == 1) && i == 1)
+        if ((currentCity == 0 || currentCity == 1 || currentCity == 2) && i == 1)
         {
             buildings[i].y = FLOOR_Y - buildings[i].h;
         }
@@ -703,8 +723,9 @@ static void initBuildings(void)
         for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
         {
             const u8 col = 1 + ((p & 1) * 2);
-            const u8 row = (currentCity == 1 && i == 1) ? 7 + ((p / 2) * 3) : 1 + ((p / 2) * 2);
-            buildings[i].personX[p] = buildings[i].x + (col < buildings[i].w ? col : 1);
+            const u8 row = (currentCity == 1 && i == 1) ? 7 + ((p / 2) * 3) : ((currentCity == 2 && i == 1) ? 2 : 1 + ((p / 2) * 2));
+            const u8 personCol = (currentCity == 2 && i == 1) ? 1 + p : col;
+            buildings[i].personX[p] = buildings[i].x + (personCol < buildings[i].w ? personCol : 1);
             buildings[i].personY[p] = buildings[i].y + (row < buildings[i].h ? row : 1);
             buildings[i].personAlive[p] = (buildings[i].personY[p] < FLOOR_Y - 1);
             buildings[i].personEdible[p] = ((i + p) & 1) == 0;
@@ -846,9 +867,14 @@ static bool isOldWaterTowerBuilding(const Building *b)
     return currentCity == 1 && b == &buildings[1];
 }
 
+static bool isMushroomBuilding(const Building *b)
+{
+    return currentCity == 2 && b == &buildings[1];
+}
+
 static s16 climbTopYForBuilding(const Building *b)
 {
-    const u8 topRow = isOldWaterTowerBuilding(b) ? b->y + 3 : b->y;
+    const u8 topRow = isOldWaterTowerBuilding(b) ? b->y + 3 : (isMushroomBuilding(b) ? b->y + 5 : b->y);
     return (topRow * 8) - PLAYER_H;
 }
 
@@ -946,6 +972,63 @@ static void drawOldWaterTowerBuilding(const Building *b, u8 visibleH, u8 drawY)
     }
 }
 
+static void drawMushroomBuilding(const Building *b, u8 visibleH, u8 drawY)
+{
+    const s16 capX = b->x - 2;
+    const u8 stemX = b->x + 1;
+
+    for (u8 yy = 0; yy < visibleH; yy++)
+    {
+        const u8 worldY = drawY + yy;
+        const u8 rel = worldY - b->y;
+
+        if (rel == 0)
+        {
+            if (!b->collapsing && worldY > HUD_TILES_H)
+            {
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_ANTENNA), b->x + 2, worldY - 1);
+            }
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_CAP_MID), b->x + 2, worldY);
+            continue;
+        }
+        if (rel == 1)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_CAP_LEFT), b->x + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_CAP_MID), b->x + 2, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_CAP_RIGHT), b->x + 3, worldY);
+            continue;
+        }
+        if (rel == 2)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_MUSHROOM_CAP_MID), b->x, worldY, b->w, 1);
+            continue;
+        }
+        if (rel == 3)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_CAP_LEFT), capX, worldY);
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_MUSHROOM_CAP_MID), capX + 1, worldY, 7, 1);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_CAP_RIGHT), capX + 8, worldY);
+            continue;
+        }
+        if (rel == 4)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_UNDERSIDE), capX, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_UNDERSIDE), capX + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_UNDERSIDE), capX + 2, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_UNDERSIDE), capX + 3, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_UNDERSIDE), capX + 4, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_UNDERSIDE), capX + 5, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_UNDERSIDE), capX + 6, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_UNDERSIDE), capX + 7, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_MUSHROOM_UNDERSIDE), capX + 8, worldY);
+            continue;
+        }
+
+        const u8 stemTile = ((rel + yy) & 1) ? TILE_MUSHROOM_STEM_SHADE : TILE_MUSHROOM_STEM;
+        VDP_fillTileMapRect(BG_B, attr(PAL0, stemTile), stemX, worldY, 3, 1);
+    }
+}
+
 static void drawBuilding(const Building *b)
 {
     if (!b->alive && !b->collapsing) return;
@@ -981,6 +1064,22 @@ static void drawBuilding(const Building *b)
     if (isOldWaterTowerBuilding(b))
     {
         drawOldWaterTowerBuilding(b, visibleH, drawY);
+        drawBuildingChunks(b, visibleH, drawY);
+        if (b->cracking) drawBuildingCracks(b, visibleH);
+        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+
+        for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
+        {
+            if (!b->personAlive[p]) continue;
+            if (b->personY[p] < drawY || b->personY[p] >= drawY + visibleH) continue;
+            VDP_setTileMapXY(BG_B, attr(PAL0, windowPersonTile(b, p)), b->personX[p], b->personY[p]);
+        }
+        return;
+    }
+
+    if (isMushroomBuilding(b))
+    {
+        drawMushroomBuilding(b, visibleH, drawY);
         drawBuildingChunks(b, visibleH, drawY);
         if (b->cracking) drawBuildingCracks(b, visibleH);
         if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
@@ -1349,6 +1448,27 @@ static void drawSelect(void)
     PAL_setPalette(PAL3, paletteSelectOverlay, DMA);
     selectOverlayMonster = 0xFF;
     drawSelectOverlay();
+}
+
+static void drawLevelSelect(void)
+{
+    char levelNumber[4];
+
+    hidePlayerSprite();
+    hideThreatSprites();
+    clearAll();
+    drawSkyline();
+    drawPanel(6, 7, 28, 11);
+    VDP_setTextPalette(PAL0);
+    drawTextSv("HEMLIG LEVEL SELECT", 10, 9);
+    VDP_drawText("<", 9, 12);
+    VDP_drawText(">", 30, 12);
+    VDP_fillTileMapRect(BG_A, 0, 11, 12, 18, 2);
+    VDP_drawText("NIVA", 13, 12);
+    intToStr(selectedCity + 1, levelNumber, 2);
+    VDP_drawText(levelNumber, 18, 12);
+    drawTextSv(cities[selectedCity], 15, 13);
+    VDP_drawText("START", 17, 15);
 }
 
 static void drawIntro(void)
@@ -1975,6 +2095,24 @@ static bool damageBuildingAtAttack(AttackBox attack)
     return FALSE;
 }
 
+static bool damageMushroomHatFromBelow(Building *b, AttackBox attack)
+{
+    if (!isMushroomBuilding(b)) return FALSE;
+    if (attack.yDir >= 0) return FALSE;
+
+    const s16 capX = (b->x - 2) * 8;
+    const s16 capY = b->y * 8;
+    const s16 capW = 9 * 8;
+    const s16 capH = 5 * 8;
+    if (!rectsOverlap(attack.x, attack.y, attack.w, attack.h, capX, capY, capW, capH)) return FALSE;
+
+    s16 rawX = (attack.x + (attack.w / 2)) / 8;
+    if (rawX < b->x - 2) rawX = b->x - 2;
+    if (rawX > b->x + 6) rawX = b->x + 6;
+    applyBuildingDamage(b, (u8)rawX, b->y + 3);
+    return TRUE;
+}
+
 static void damageBuildings(ClimbContact contact, AttackBox attack)
 {
     if (!contact.active) return;
@@ -1984,6 +2122,7 @@ static void damageBuildings(ClimbContact contact, AttackBox attack)
     if (!b->alive) return;
     if (b->cracking) return;
     if (b->collapsing) return;
+    if (damageMushroomHatFromBelow(b, attack)) return;
     if ((player.y / 8) + 4 >= b->y)
     {
         const s16 rawY = (attack.y + (attack.h / 2)) / 8;
@@ -2081,7 +2220,7 @@ static RoofContact getRoofContact(void)
         const s16 bTop = b->y * 8;
         if (!b->alive) continue;
         if (b->collapsing) continue;
-        if (isOldWaterTowerBuilding(b)) continue;
+        if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b)) continue;
         if (center < bLeft + 4 || center > bRight - 4) continue;
         if (feet < bTop - 6 || feet > bTop + 8) continue;
 
@@ -2109,12 +2248,19 @@ static ClimbContact getClimbContact(void)
     for (u8 i = 0; i < MAX_BUILDINGS; i++)
     {
         const Building *b = &buildings[i];
-        const s16 bLeft = b->x * 8;
-        const s16 bRight = (b->x + b->w) * 8;
-        const s16 bTop = b->y * 8;
+        s16 bLeft = b->x * 8;
+        s16 bRight = (b->x + b->w) * 8;
+        s16 bTop = b->y * 8;
         const s16 bBottom = FLOOR_Y * 8;
         if (!b->alive) continue;
         if (b->collapsing) continue;
+
+        if (isMushroomBuilding(b))
+        {
+            bLeft = (b->x + 1) * 8;
+            bRight = (b->x + 4) * 8;
+            bTop = (b->y + 5) * 8;
+        }
 
         if (feet < bTop - 6 || top > bBottom) continue;
 
@@ -2215,7 +2361,7 @@ static void updatePlayer(u16 joy, u16 pressed)
             player.y = climbTopY;
             player.vy = 0;
             climbing = FALSE;
-            if (isOldWaterTowerBuilding(b))
+            if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b))
             {
                 player.x = climbContact.snapX;
                 player.grounded = FALSE;
@@ -2373,11 +2519,47 @@ static void handleState(u16 joy)
     switch (state)
     {
         case STATE_TITLE:
-            if (pressed & BUTTON_START)
+            if ((pressed & BUTTON_START) && ((joy & (BUTTON_A | BUTTON_B | BUTTON_C)) == (BUTTON_A | BUTTON_B | BUTTON_C)))
+            {
+                selectedCity = currentCity;
+                state = STATE_LEVEL_SELECT;
+                loadGameVideo();
+                drawLevelSelect();
+                playTone(72, 12);
+            }
+            else if (pressed & BUTTON_START)
             {
                 state = STATE_SELECT;
                 drawSelect();
                 playTone(120, 8);
+            }
+            break;
+
+        case STATE_LEVEL_SELECT:
+            if (pressed & BUTTON_LEFT)
+            {
+                selectedCity = (selectedCity + (sizeof(cities) / sizeof(cities[0])) - 1) % (sizeof(cities) / sizeof(cities[0]));
+                drawLevelSelect();
+                playTone(180, 4);
+            }
+            if (pressed & BUTTON_RIGHT)
+            {
+                selectedCity = (selectedCity + 1) % (sizeof(cities) / sizeof(cities[0]));
+                drawLevelSelect();
+                playTone(160, 4);
+            }
+            if (pressed & BUTTON_START)
+            {
+                currentCity = selectedCity;
+                state = STATE_INTRO;
+                drawIntro();
+                playTone(100, 10);
+            }
+            else if (pressed & (BUTTON_B | BUTTON_C))
+            {
+                state = STATE_TITLE;
+                drawTitle();
+                playTone(90, 6);
             }
             break;
 
