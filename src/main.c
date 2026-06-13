@@ -27,6 +27,7 @@
 #define SUNDSVALL_BRIDGE_SEGMENT_W 7
 #define SUNDSVALL_BRIDGE_Y (FLOOR_Y - 1)
 #define SUNDSVALL_WATER_DAMAGE_FRAMES 90
+#define SUNDSVALL_THREAT_WATER_FRAMES 48
 #define BUILDING_CRACK_STEP_FRAMES 8
 #define BUILDING_COLLAPSE_STEP_FRAMES 6
 #define PLAYER_STUN_FRAMES 90
@@ -270,6 +271,7 @@ typedef struct
     s16 y;
     s16 speed;
     u8 stepTimer;
+    u8 waterTimer;
     bool active;
     Sprite *sprite;
 } Enemy;
@@ -281,6 +283,7 @@ typedef struct
     s16 speed;
     u8 stepTimer;
     u8 cooldown;
+    u8 waterTimer;
     bool active;
     Sprite *sprite;
 } Tank;
@@ -447,6 +450,8 @@ static RoofContact getRoofContact(void);
 static u8 buildingBaseY(const Building *b);
 static s16 playerGroundY(void);
 static s16 groundActorY(void);
+static u8 sundsvallBridgeSegmentAt(s16 x);
+static bool sundsvallBridgeSegmentBrokenAt(s16 x);
 static void spawnExplosion(s16 x, s16 y);
 static void loadTiles(void);
 static void hidePlayerSprite(void);
@@ -2116,9 +2121,9 @@ static void updateThreatSprites(void)
         SPR_setVisibility(e->sprite, e->active ? VISIBLE : HIDDEN);
         if (e->active)
         {
-            SPR_setFrame(e->sprite, (frame >> 2) & 3);
+            SPR_setFrame(e->sprite, e->waterTimer > 0 ? ((e->waterTimer >> 2) & 1) : ((frame >> 2) & 3));
             SPR_setHFlip(e->sprite, e->speed < 0);
-            SPR_setPosition(e->sprite, e->x, e->y + groundSpriteOffset);
+            SPR_setPosition(e->sprite, e->x, e->y + (e->waterTimer > 0 ? ((e->waterTimer & 4) ? 5 : 2) : groundSpriteOffset));
         }
     }
 
@@ -2132,9 +2137,9 @@ static void updateThreatSprites(void)
         SPR_setVisibility(t->sprite, t->active ? VISIBLE : HIDDEN);
         if (t->active)
         {
-            SPR_setFrame(t->sprite, (frame >> 3) & 3);
+            SPR_setFrame(t->sprite, t->waterTimer > 0 ? ((t->waterTimer >> 2) & 1) : ((frame >> 3) & 3));
             SPR_setHFlip(t->sprite, t->speed < 0);
-            SPR_setPosition(t->sprite, t->x, t->y + groundSpriteOffset);
+            SPR_setPosition(t->sprite, t->x, t->y + (t->waterTimer > 0 ? ((t->waterTimer & 4) ? 6 : 3) : groundSpriteOffset));
         }
     }
 
@@ -2331,6 +2336,7 @@ static void spawnEnemy(void)
             enemies[i].y = groundActorY();
             enemies[i].speed = fromRight ? -1 : 1;
             enemies[i].stepTimer = 0;
+            enemies[i].waterTimer = 0;
             enemies[i].active = TRUE;
             return;
         }
@@ -2349,6 +2355,7 @@ static void spawnTank(void)
             tanks[i].speed = fromRight ? -1 : 1;
             tanks[i].stepTimer = 0;
             tanks[i].cooldown = 120;
+            tanks[i].waterTimer = 0;
             tanks[i].active = TRUE;
             return;
         }
@@ -2570,6 +2577,25 @@ static AttackBox getAttackBox(u16 joy)
     return box;
 }
 
+static s16 sundsvallBridgeExitX(s16 center, s16 speed, u8 spriteW)
+{
+    const u8 seg = sundsvallBridgeSegmentAt(center);
+    const s16 left = seg * SUNDSVALL_BRIDGE_SEGMENT_W * 8;
+    s16 right = (seg + 1) * SUNDSVALL_BRIDGE_SEGMENT_W * 8;
+    const s16 screenRight = SCREEN_TILES_W * 8;
+    if (right > screenRight) right = screenRight;
+
+    return speed >= 0 ? right + 2 : left - spriteW - 2;
+}
+
+static bool startThreatWaterDrop(s16 center)
+{
+    if (!sundsvallBridgeSegmentBrokenAt(center)) return FALSE;
+
+    playTone(72, 6);
+    return TRUE;
+}
+
 static void updateThreats(void)
 {
     const bool tailBouncing = (JOY_readJoypad(JOY_1) & BUTTON_A) && !player.grounded;
@@ -2584,11 +2610,30 @@ static void updateThreats(void)
         Enemy *e = &enemies[i];
         if (!e->active) continue;
 
+        if (e->waterTimer > 0)
+        {
+            e->waterTimer--;
+            e->y = (SUNDSVALL_BRIDGE_Y * 8) + 2;
+            if (e->waterTimer == 0)
+            {
+                e->x = sundsvallBridgeExitX(e->x + 12, e->speed, 24);
+                e->y = groundActorY();
+                playTone(96, 4);
+            }
+            continue;
+        }
+
         e->stepTimer++;
         if (e->stepTimer >= 2)
         {
             e->stepTimer = 0;
             e->x += e->speed;
+        }
+        if (startThreatWaterDrop(e->x + 12))
+        {
+            e->waterTimer = SUNDSVALL_THREAT_WATER_FRAMES;
+            e->y = (SUNDSVALL_BRIDGE_Y * 8) + 2;
+            continue;
         }
         if (e->x < -40 || e->x > 340)
         {
@@ -2626,11 +2671,30 @@ static void updateThreats(void)
         Tank *t = &tanks[i];
         if (!t->active) continue;
 
+        if (t->waterTimer > 0)
+        {
+            t->waterTimer--;
+            t->y = (SUNDSVALL_BRIDGE_Y * 8) + 4;
+            if (t->waterTimer == 0)
+            {
+                t->x = sundsvallBridgeExitX(t->x + 12, t->speed, 24);
+                t->y = groundActorY();
+                playTone(86, 4);
+            }
+            continue;
+        }
+
         t->stepTimer++;
         if (t->stepTimer >= 3)
         {
             t->stepTimer = 0;
             t->x += t->speed;
+        }
+        if (startThreatWaterDrop(t->x + 12))
+        {
+            t->waterTimer = SUNDSVALL_THREAT_WATER_FRAMES;
+            t->y = (SUNDSVALL_BRIDGE_Y * 8) + 4;
+            continue;
         }
         if (t->x < -40 || t->x > 340)
         {
@@ -2890,6 +2954,7 @@ static bool attackEnemies(AttackBox attack)
     {
         Enemy *e = &enemies[i];
         if (!e->active) continue;
+        if (e->waterTimer > 0) continue;
 
         if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, e->x, e->y, 24, 16))
         {
@@ -2905,6 +2970,7 @@ static bool attackEnemies(AttackBox attack)
     {
         Tank *t = &tanks[i];
         if (!t->active) continue;
+        if (t->waterTimer > 0) continue;
 
         if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, t->x, t->y, 24, 16))
         {
