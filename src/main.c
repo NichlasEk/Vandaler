@@ -18,9 +18,12 @@
 #define MAX_DAMAGE_MARKS 16
 #define MAX_WINDOW_PEOPLE 4
 #define CITY_GAVLE 6
+#define CITY_SUNDSVALL 7
 #define GAVLE_GOAT_INDEX 1
 #define GAVLE_ARSONIST_SPAWN_FRAMES 900
 #define GAVLE_ARSONIST_IGNITE_FRAMES 150
+#define SUNDSVALL_BRIDGE_STRESS_FRAMES 120
+#define SUNDSVALL_WATER_DAMAGE_FRAMES 90
 #define BUILDING_CRACK_STEP_FRAMES 8
 #define BUILDING_COLLAPSE_STEP_FRAMES 6
 #define PLAYER_STUN_FRAMES 90
@@ -182,6 +185,9 @@
 #define TILE_GOAT_HORN       (TILE_USER_INDEX + 103)
 #define TILE_GOAT_BURN       (TILE_USER_INDEX + 104)
 #define TILE_GOAT_ASH        (TILE_USER_INDEX + 105)
+#define TILE_BRIDGE_DECK     (TILE_USER_INDEX + 106)
+#define TILE_BRIDGE_PIER     (TILE_USER_INDEX + 107)
+#define TILE_WATER_SURFACE   (TILE_USER_INDEX + 108)
 
 typedef enum
 {
@@ -418,6 +424,9 @@ static u8 currentCity = 0;
 static u8 selectedCity = 0;
 static u8 playerHealth = PLAYER_MAX_HEALTH;
 static u8 invulnerableTimer = 0;
+static u8 bridgeStressTimer = 0;
+static u8 waterDamageTimer = 0;
+static bool playerInWater = FALSE;
 static u16 frame = 0;
 static u16 score = 0;
 static u16 previousJoy = 0;
@@ -643,6 +652,9 @@ static void loadTiles(void)
     VDP_loadTileData(tileGoatHorn, TILE_GOAT_HORN, 1, DMA);
     VDP_loadTileData(tileGoatBurn, TILE_GOAT_BURN, 1, DMA);
     VDP_loadTileData(tileGoatAsh, TILE_GOAT_ASH, 1, DMA);
+    VDP_loadTileData(tileBridgeDeck, TILE_BRIDGE_DECK, 1, DMA);
+    VDP_loadTileData(tileBridgePier, TILE_BRIDGE_PIER, 1, DMA);
+    VDP_loadTileData(tileWaterSurface, TILE_WATER_SURFACE, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -734,6 +746,18 @@ static void drawSkyline(void)
 
 static void drawRoad(void)
 {
+    if (currentCity == CITY_SUNDSVALL)
+    {
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WATER_SURFACE), 0, FLOOR_Y, SCREEN_TILES_W, SCREEN_TILES_H - FLOOR_Y);
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_BRIDGE_DECK), 0, FLOOR_Y, SCREEN_TILES_W, 1);
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_LINE), 0, FLOOR_Y - 1, SCREEN_TILES_W, 1);
+        for (u8 x = 3; x < SCREEN_TILES_W; x += 7)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_BRIDGE_PIER), x, FLOOR_Y + 1, 1, SCREEN_TILES_H - FLOOR_Y - 1);
+        }
+        return;
+    }
+
     VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROAD_DARK), 0, FLOOR_Y, SCREEN_TILES_W, 4);
     for (u8 x = 1; x < SCREEN_TILES_W; x += 6)
     {
@@ -833,6 +857,15 @@ static void initBuildings(void)
             buildings[i].x = 10;
             buildings[i].w = 14;
             buildings[i].h = 13;
+        }
+        if (currentCity == CITY_SUNDSVALL)
+        {
+            const s16 sx[MAX_BUILDINGS] = {4, 11, 18, 25, 32};
+            const u8 sw[MAX_BUILDINGS] = {5, 6, 5, 6, 5};
+            const u8 sh[MAX_BUILDINGS] = {9, 12, 10, 11, 9};
+            buildings[i].x = sx[i];
+            buildings[i].w = sw[i];
+            buildings[i].h = sh[i];
         }
         if (currentCity == 0 && i == 1)
         {
@@ -2182,6 +2215,9 @@ static void drawIntro(void)
 static void startCity(void)
 {
     gavleGoatBurned = FALSE;
+    bridgeStressTimer = 0;
+    waterDamageTimer = 0;
+    playerInWater = FALSE;
     initBuildings();
     resetThreats();
     player.x = 16;
@@ -3160,6 +3196,7 @@ static void updatePlayer(u16 joy, u16 pressed)
     bool moved = FALSE;
     bool bounce = FALSE;
     const bool bouncing = (joy & BUTTON_A) && !player.grounded;
+    const s16 walkStep = (currentCity == CITY_SUNDSVALL && playerInWater) ? 1 : 2;
 
     if (player.stunTimer > 0)
     {
@@ -3178,13 +3215,13 @@ static void updatePlayer(u16 joy, u16 pressed)
 
     if (joy & BUTTON_LEFT)
     {
-        player.x -= 2;
+        player.x -= walkStep;
         player.dir = -1;
         moved = TRUE;
     }
     if (joy & BUTTON_RIGHT)
     {
-        player.x += 2;
+        player.x += walkStep;
         player.dir = 1;
         moved = TRUE;
     }
@@ -3192,7 +3229,7 @@ static void updatePlayer(u16 joy, u16 pressed)
     climbContact = getClimbContact();
     roofContact = getRoofContact();
     const bool towerFacadeAtRoof = climbContact.active && isCathedralTowerBuilding(&buildings[climbContact.building]);
-    onFacade = !bouncing && climbContact.active && player.y < PLAYER_GROUND_Y && (!roofContact.active || towerFacadeAtRoof);
+    onFacade = !bouncing && climbContact.active && (player.y < PLAYER_GROUND_Y || playerInWater) && (!roofContact.active || towerFacadeAtRoof);
     climbing = !bouncing && (joy & BUTTON_UP) && climbContact.active;
 
     if (towerFacadeAtRoof && roofContact.active && !climbing)
@@ -3221,11 +3258,19 @@ static void updatePlayer(u16 joy, u16 pressed)
         player.y = roofContact.y;
         player.vy = 0;
         player.grounded = TRUE;
+        playerInWater = FALSE;
+    }
+    if (playerInWater && !onFacade && !climbing && !onRoof)
+    {
+        player.y = PLAYER_GROUND_Y + 10;
+        player.vy = 0;
+        player.grounded = TRUE;
     }
     player.walking = moved && player.grounded;
 
     if (onFacade || climbing)
     {
+        playerInWater = FALSE;
         player.x = climbContact.snapX;
         player.dir = climbContact.attackDir;
         player.vy = 0;
@@ -3283,6 +3328,7 @@ static void updatePlayer(u16 joy, u16 pressed)
     }
     if ((pressed & BUTTON_A) && player.grounded)
     {
+        playerInWater = FALSE;
         player.vy = PLAYER_JUMP_VY;
         player.gravityTimer = 0;
         player.landTimer = 0;
@@ -3368,6 +3414,47 @@ static void updatePlayer(u16 joy, u16 pressed)
         player.grounded = FALSE;
         player.landTimer = 0;
         playTone(220, 4);
+    }
+
+    if (currentCity == CITY_SUNDSVALL)
+    {
+        if (!playerInWater && player.grounded && player.y >= PLAYER_GROUND_Y - 2 && !moved && !player.punching)
+        {
+            if (bridgeStressTimer < SUNDSVALL_BRIDGE_STRESS_FRAMES) bridgeStressTimer++;
+            if (bridgeStressTimer >= SUNDSVALL_BRIDGE_STRESS_FRAMES)
+            {
+                bridgeStressTimer = 0;
+                playerInWater = TRUE;
+                player.y = PLAYER_GROUND_Y + 10;
+                player.vy = 0;
+                player.grounded = TRUE;
+                playTone(70, 16);
+            }
+        }
+        else if (!playerInWater)
+        {
+            bridgeStressTimer = 0;
+        }
+
+        if (playerInWater)
+        {
+            if (waterDamageTimer < SUNDSVALL_WATER_DAMAGE_FRAMES) waterDamageTimer++;
+            if (waterDamageTimer >= SUNDSVALL_WATER_DAMAGE_FRAMES)
+            {
+                waterDamageTimer = 0;
+                hitPlayer();
+            }
+        }
+        else
+        {
+            waterDamageTimer = 0;
+        }
+    }
+    else
+    {
+        bridgeStressTimer = 0;
+        waterDamageTimer = 0;
+        playerInWater = FALSE;
     }
 }
 

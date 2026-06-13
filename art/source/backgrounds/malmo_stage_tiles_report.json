@@ -1,7 +1,7 @@
 {
   "palette_colors": 16,
-  "tile_count": 105,
-  "unique_tile_count": 104,
+  "tile_count": 108,
+  "unique_tile_count": 107,
   "tiles": [
     {
       "name": "tileSky",
@@ -825,6 +825,27 @@
       "used_indices": [
         3,
         11
+      ]
+    },
+    {
+      "name": "tileBridgeDeck",
+      "used_indices": [
+        3,
+        11
+      ]
+    },
+    {
+      "name": "tileBridgePier",
+      "used_indices": [
+        0,
+        3
+      ]
+    },
+    {
+      "name": "tileWaterSurface",
+      "used_indices": [
+        1,
+        6
       ]
     }
   ]
