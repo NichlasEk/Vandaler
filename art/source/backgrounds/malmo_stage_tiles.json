@@ -717,6 +717,156 @@
       "00090000",
       "00090000",
       "00090000"
+    ],
+    "tileFridnasWall": [
+      "99999999",
+      "97999979",
+      "99999999",
+      "99979999",
+      "99999999",
+      "97999979",
+      "99999999",
+      "99999979"
+    ],
+    "tileFridnasStone": [
+      "33333333",
+      "39393939",
+      "33333333",
+      "93939393",
+      "33333333",
+      "33393333",
+      "33333333",
+      "93333339"
+    ],
+    "tileFridnasWindow": [
+      "99777999",
+      "97BBBB79",
+      "97B99B79",
+      "97B99B79",
+      "97BBBB79",
+      "99777999",
+      "99999999",
+      "99999999"
+    ],
+    "tileFridnasRoofLeft": [
+      "BBBBBBBB",
+      "BBBBBBBB",
+      "ABBBBBBB",
+      "BABBBBBB",
+      "BBABBBBB",
+      "BBBBBBBB",
+      "BAABBAAB",
+      "BBBBBBBB"
+    ],
+    "tileFridnasRoofMid": [
+      "BBBBBBBB",
+      "BBBABBBB",
+      "BBBBBBBB",
+      "BBABBBAB",
+      "BBBBBBBB",
+      "BABBBABB",
+      "BBBBBBBB",
+      "AAAAAAAA"
+    ],
+    "tileFridnasRoofRight": [
+      "BBBBBBBB",
+      "BBBBBBBB",
+      "BBBBBBBA",
+      "BBBBBBAB",
+      "BBBBBABB",
+      "BBBBBBBB",
+      "BAABBAAB",
+      "BBBBBBBB"
+    ],
+    "tileFridnasTowerRoof": [
+      "BBBBBBBB",
+      "BBBBBBBB",
+      "BBABABBB",
+      "BBBBBBBB",
+      "BBABBBBB",
+      "BBBBBBBB",
+      "BAABBAAB",
+      "BBBBBBBB"
+    ],
+    "tileFridnasChimney": [
+      "00077000",
+      "00077000",
+      "00077000",
+      "00077000",
+      "00077000",
+      "00099000",
+      "00099000",
+      "00000000"
+    ],
+    "tileCityHallBrick": [
+      "77777777",
+      "7A777A77",
+      "77777777",
+      "777A7777",
+      "77A777A7",
+      "77777777",
+      "A7777777",
+      "777A7777"
+    ],
+    "tileCityHallArch": [
+      "77777777",
+      "77A7A777",
+      "7ABBBBA7",
+      "7B7777B7",
+      "7B7DD7B7",
+      "7B7777B7",
+      "77BBBB77",
+      "77777777"
+    ],
+    "tileCityHallRoof": [
+      "BBBBBBBB",
+      "BBABBBAB",
+      "BBBBBBBB",
+      "BBAABBBB",
+      "BBBBBBBB",
+      "ABBBBABB",
+      "BBBBBBBB",
+      "AAAAAAAA"
+    ],
+    "tileCityHallTower": [
+      "77777777",
+      "7A7777A7",
+      "77777777",
+      "777A7777",
+      "77A77777",
+      "777777A7",
+      "77777777",
+      "A7777A77"
+    ],
+    "tileCityHallTop": [
+      "00444400",
+      "04CCCC40",
+      "4C9999C4",
+      "4C9999C4",
+      "04CCCC40",
+      "00444400",
+      "000BB000",
+      "000BB000"
+    ],
+    "tileCityHallCrowns": [
+      "00D0D000",
+      "0DDDDD00",
+      "00D0D000",
+      "D0D0D0D0",
+      "DDDDDDD0",
+      "0D0D0D00",
+      "000D0000",
+      "000B0000"
+    ],
+    "tileCityHallSpire": [
+      "000D0000",
+      "000D0000",
+      "000B0000",
+      "000B0000",
+      "000B0000",
+      "000B0000",
+      "00040000",
+      "00040000"
     ]
   }
 }

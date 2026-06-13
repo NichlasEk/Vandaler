@@ -1,7 +1,7 @@
 {
   "palette_colors": 16,
-  "tile_count": 70,
-  "unique_tile_count": 70,
+  "tile_count": 85,
+  "unique_tile_count": 85,
   "tiles": [
     {
       "name": "tileSky",
@@ -553,6 +553,121 @@
         0,
         9,
         15
+      ]
+    },
+    {
+      "name": "tileFridnasWall",
+      "used_indices": [
+        7,
+        9
+      ]
+    },
+    {
+      "name": "tileFridnasStone",
+      "used_indices": [
+        3,
+        9
+      ]
+    },
+    {
+      "name": "tileFridnasWindow",
+      "used_indices": [
+        7,
+        9,
+        11
+      ]
+    },
+    {
+      "name": "tileFridnasRoofLeft",
+      "used_indices": [
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileFridnasRoofMid",
+      "used_indices": [
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileFridnasRoofRight",
+      "used_indices": [
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileFridnasTowerRoof",
+      "used_indices": [
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileFridnasChimney",
+      "used_indices": [
+        0,
+        7,
+        9
+      ]
+    },
+    {
+      "name": "tileCityHallBrick",
+      "used_indices": [
+        7,
+        10
+      ]
+    },
+    {
+      "name": "tileCityHallArch",
+      "used_indices": [
+        7,
+        10,
+        11,
+        13
+      ]
+    },
+    {
+      "name": "tileCityHallRoof",
+      "used_indices": [
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileCityHallTower",
+      "used_indices": [
+        7,
+        10
+      ]
+    },
+    {
+      "name": "tileCityHallTop",
+      "used_indices": [
+        0,
+        4,
+        9,
+        11,
+        12
+      ]
+    },
+    {
+      "name": "tileCityHallCrowns",
+      "used_indices": [
+        0,
+        11,
+        13
+      ]
+    },
+    {
+      "name": "tileCityHallSpire",
+      "used_indices": [
+        0,
+        4,
+        11,
+        13
       ]
     }
   ]

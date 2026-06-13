@@ -143,6 +143,21 @@
 #define TILE_MUSHROOM_STEM    (TILE_USER_INDEX + 68)
 #define TILE_MUSHROOM_STEM_SHADE (TILE_USER_INDEX + 69)
 #define TILE_MUSHROOM_ANTENNA (TILE_USER_INDEX + 70)
+#define TILE_FRIDNAS_WALL     (TILE_USER_INDEX + 71)
+#define TILE_FRIDNAS_STONE    (TILE_USER_INDEX + 72)
+#define TILE_FRIDNAS_WINDOW   (TILE_USER_INDEX + 73)
+#define TILE_FRIDNAS_ROOF_LEFT (TILE_USER_INDEX + 74)
+#define TILE_FRIDNAS_ROOF_MID (TILE_USER_INDEX + 75)
+#define TILE_FRIDNAS_ROOF_RIGHT (TILE_USER_INDEX + 76)
+#define TILE_FRIDNAS_TOWER_ROOF (TILE_USER_INDEX + 77)
+#define TILE_FRIDNAS_CHIMNEY  (TILE_USER_INDEX + 78)
+#define TILE_CITY_HALL_BRICK  (TILE_USER_INDEX + 79)
+#define TILE_CITY_HALL_ARCH   (TILE_USER_INDEX + 80)
+#define TILE_CITY_HALL_ROOF   (TILE_USER_INDEX + 81)
+#define TILE_CITY_HALL_TOWER  (TILE_USER_INDEX + 82)
+#define TILE_CITY_HALL_TOP    (TILE_USER_INDEX + 83)
+#define TILE_CITY_HALL_CROWNS (TILE_USER_INDEX + 84)
+#define TILE_CITY_HALL_SPIRE  (TILE_USER_INDEX + 85)
 
 typedef enum
 {
@@ -553,6 +568,21 @@ static void loadTiles(void)
     VDP_loadTileData(tileMushroomStem, TILE_MUSHROOM_STEM, 1, DMA);
     VDP_loadTileData(tileMushroomStemShade, TILE_MUSHROOM_STEM_SHADE, 1, DMA);
     VDP_loadTileData(tileMushroomAntenna, TILE_MUSHROOM_ANTENNA, 1, DMA);
+    VDP_loadTileData(tileFridnasWall, TILE_FRIDNAS_WALL, 1, DMA);
+    VDP_loadTileData(tileFridnasStone, TILE_FRIDNAS_STONE, 1, DMA);
+    VDP_loadTileData(tileFridnasWindow, TILE_FRIDNAS_WINDOW, 1, DMA);
+    VDP_loadTileData(tileFridnasRoofLeft, TILE_FRIDNAS_ROOF_LEFT, 1, DMA);
+    VDP_loadTileData(tileFridnasRoofMid, TILE_FRIDNAS_ROOF_MID, 1, DMA);
+    VDP_loadTileData(tileFridnasRoofRight, TILE_FRIDNAS_ROOF_RIGHT, 1, DMA);
+    VDP_loadTileData(tileFridnasTowerRoof, TILE_FRIDNAS_TOWER_ROOF, 1, DMA);
+    VDP_loadTileData(tileFridnasChimney, TILE_FRIDNAS_CHIMNEY, 1, DMA);
+    VDP_loadTileData(tileCityHallBrick, TILE_CITY_HALL_BRICK, 1, DMA);
+    VDP_loadTileData(tileCityHallArch, TILE_CITY_HALL_ARCH, 1, DMA);
+    VDP_loadTileData(tileCityHallRoof, TILE_CITY_HALL_ROOF, 1, DMA);
+    VDP_loadTileData(tileCityHallTower, TILE_CITY_HALL_TOWER, 1, DMA);
+    VDP_loadTileData(tileCityHallTop, TILE_CITY_HALL_TOP, 1, DMA);
+    VDP_loadTileData(tileCityHallCrowns, TILE_CITY_HALL_CROWNS, 1, DMA);
+    VDP_loadTileData(tileCityHallSpire, TILE_CITY_HALL_SPIRE, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -697,6 +727,24 @@ static void initBuildings(void)
         buildings[i].x = xs[i];
         buildings[i].w = ws[i];
         buildings[i].h = hs[i];
+        if (currentCity == 3 && i == 2)
+        {
+            buildings[i].x = 18;
+            buildings[i].w = 8;
+            buildings[i].h = 12;
+        }
+        if (currentCity == 4 && i == 1)
+        {
+            buildings[i].x = 9;
+            buildings[i].w = 17;
+            buildings[i].h = 9;
+        }
+        if (currentCity == 4 && i == 2)
+        {
+            buildings[i].x = 18;
+            buildings[i].w = 4;
+            buildings[i].h = 10;
+        }
         if (currentCity == 0 && i == 1)
         {
             buildings[i].h = 16;
@@ -710,9 +758,13 @@ static void initBuildings(void)
             buildings[i].h = 16;
         }
         buildings[i].y = FLOOR_Y - hs[i];
-        if ((currentCity == 0 || currentCity == 1 || currentCity == 2) && i == 1)
+        if (((currentCity == 0 || currentCity == 1 || currentCity == 2 || currentCity == 4) && i == 1) || (currentCity == 3 && i == 2))
         {
             buildings[i].y = FLOOR_Y - buildings[i].h;
+        }
+        if (currentCity == 4 && i == 2)
+        {
+            buildings[i].y = buildings[1].y - buildings[i].h;
         }
         buildings[i].damage = 0;
         for (u8 d = 0; d < MAX_DAMAGE_MARKS; d++)
@@ -723,8 +775,8 @@ static void initBuildings(void)
         for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
         {
             const u8 col = 1 + ((p & 1) * 2);
-            const u8 row = (currentCity == 1 && i == 1) ? 7 + ((p / 2) * 3) : ((currentCity == 2 && i == 1) ? 2 : 1 + ((p / 2) * 2));
-            const u8 personCol = (currentCity == 2 && i == 1) ? 1 + p : col;
+            const u8 row = (currentCity == 1 && i == 1) ? 7 + ((p / 2) * 3) : ((currentCity == 2 && i == 1) ? 2 : ((currentCity == 3 && i == 2) ? 5 + ((p / 2) * 3) : ((currentCity == 4 && i == 1) ? 3 + ((p / 2) * 3) : 1 + ((p / 2) * 2))));
+            const u8 personCol = (currentCity == 2 && i == 1) ? 1 + p : ((currentCity == 4 && i == 1) ? 2 + (p * 3) : col);
             buildings[i].personX[p] = buildings[i].x + (personCol < buildings[i].w ? personCol : 1);
             buildings[i].personY[p] = buildings[i].y + (row < buildings[i].h ? row : 1);
             buildings[i].personAlive[p] = (buildings[i].personY[p] < FLOOR_Y - 1);
@@ -872,10 +924,46 @@ static bool isMushroomBuilding(const Building *b)
     return currentCity == 2 && b == &buildings[1];
 }
 
+static bool isFridnasBuilding(const Building *b)
+{
+    return currentCity == 3 && b == &buildings[2];
+}
+
+static bool isCityHallBuilding(const Building *b)
+{
+    return currentCity == 4 && b == &buildings[1];
+}
+
+static bool isCityHallTowerBuilding(const Building *b)
+{
+    return currentCity == 4 && b == &buildings[2];
+}
+
 static s16 climbTopYForBuilding(const Building *b)
 {
-    const u8 topRow = isOldWaterTowerBuilding(b) ? b->y + 3 : (isMushroomBuilding(b) ? b->y + 5 : b->y);
+    const u8 topRow = isOldWaterTowerBuilding(b) ? b->y + 3 : (isMushroomBuilding(b) ? b->y + 5 : (isFridnasBuilding(b) ? b->y + 4 : b->y));
     return (topRow * 8) - PLAYER_H;
+}
+
+static u8 buildingDamageLimit(const Building *b)
+{
+    return b->h + ((isCityHallBuilding(b) || isCityHallTowerBuilding(b)) ? 8 : 2);
+}
+
+static bool isBehindStandingCityHall(const Building *b, s16 facadeX)
+{
+    if (currentCity != 4) return FALSE;
+    if (isCityHallBuilding(b) || isCityHallTowerBuilding(b)) return FALSE;
+
+    const Building *hall = &buildings[1];
+    if (!hall->alive || hall->collapsing) return FALSE;
+
+    const s16 hallLeft = hall->x * 8;
+    const s16 hallRight = (hall->x + hall->w) * 8;
+    const s16 hallTop = hall->y * 8;
+    const s16 bBottom = (b->y + b->h) * 8;
+
+    return facadeX >= hallLeft && facadeX <= hallRight && bBottom > hallTop;
 }
 
 static void drawTurningTorsoBuilding(const Building *b, u8 visibleH, u8 drawY)
@@ -1029,6 +1117,123 @@ static void drawMushroomBuilding(const Building *b, u8 visibleH, u8 drawY)
     }
 }
 
+static void drawFridnasBuilding(const Building *b, u8 visibleH, u8 drawY)
+{
+    for (u8 yy = 0; yy < visibleH; yy++)
+    {
+        const u8 worldY = drawY + yy;
+        const u8 rel = worldY - b->y;
+
+        if (rel == 0)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_CHIMNEY), b->x + 6, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_TOWER_ROOF), b->x + 3, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_TOWER_ROOF), b->x + 4, worldY);
+            continue;
+        }
+        if (rel == 1)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_ROOF_LEFT), b->x + 2, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_TOWER_ROOF), b->x + 3, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_TOWER_ROOF), b->x + 4, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_ROOF_RIGHT), b->x + 5, worldY);
+            continue;
+        }
+        if (rel == 2)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_ROOF_LEFT), b->x, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_ROOF_MID), b->x + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_TOWER_ROOF), b->x + 3, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_TOWER_ROOF), b->x + 4, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_ROOF_MID), b->x + 6, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_ROOF_RIGHT), b->x + 7, worldY);
+            continue;
+        }
+        if (rel == 3)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_ROOF_LEFT), b->x, worldY);
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_FRIDNAS_ROOF_MID), b->x + 1, worldY, b->w - 2, 1);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_ROOF_RIGHT), b->x + b->w - 1, worldY);
+            continue;
+        }
+
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_FRIDNAS_WALL), b->x, worldY, b->w, 1);
+        VDP_fillTileMapRect(BG_B, attr(PAL0, (rel & 1) ? TILE_FRIDNAS_WALL : TILE_WHITE), b->x + 3, worldY, 2, 1);
+        if (rel >= visibleH - 2)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_FRIDNAS_STONE), b->x, worldY, b->w, 1);
+        }
+        else if ((rel & 1) == 0)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_WINDOW), b->x + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_WINDOW), b->x + 6, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FRIDNAS_WINDOW), b->x + 3, worldY);
+        }
+        if (rel == visibleH - 1)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_DOOR), b->x + 4, worldY);
+        }
+    }
+}
+
+static void drawCityHallBuilding(const Building *b, u8 visibleH, u8 drawY)
+{
+    for (u8 yy = 0; yy < visibleH; yy++)
+    {
+        const u8 worldY = drawY + yy;
+        const u8 rel = worldY - b->y;
+
+        if (rel == 0)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_CITY_HALL_ROOF), b->x, worldY, b->w, 1);
+            continue;
+        }
+
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_CITY_HALL_BRICK), b->x, worldY, b->w, 1);
+        if ((rel & 1) == 0 && rel < visibleH - 1)
+        {
+            for (u8 xx = 1; xx < b->w - 1; xx += 3)
+            {
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CITY_HALL_ARCH), b->x + xx, worldY);
+            }
+        }
+        if (rel == visibleH - 1)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_FRIDNAS_STONE), b->x, worldY, b->w, 1);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_DOOR), b->x + 9, worldY);
+        }
+    }
+}
+
+static void drawCityHallTowerBuilding(const Building *b, u8 visibleH, u8 drawY)
+{
+    for (u8 yy = 0; yy < visibleH; yy++)
+    {
+        const u8 worldY = drawY + yy;
+        const u8 rel = worldY - b->y;
+
+        if (rel == 0)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CITY_HALL_CROWNS), b->x, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CITY_HALL_CROWNS), b->x + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CITY_HALL_CROWNS), b->x + 2, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_CITY_HALL_SPIRE), b->x + 3, worldY);
+            continue;
+        }
+        if (rel == 1 || rel == 2)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_CITY_HALL_TOP), b->x, worldY, b->w, 1);
+            continue;
+        }
+
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_CITY_HALL_TOWER), b->x, worldY, b->w, 1);
+        if (rel > 4 && rel < visibleH - 1 && (rel & 1) == 0)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WIN_OFF), b->x + 1, worldY);
+        }
+    }
+}
+
 static void drawBuilding(const Building *b)
 {
     if (!b->alive && !b->collapsing) return;
@@ -1090,6 +1295,47 @@ static void drawBuilding(const Building *b)
             if (b->personY[p] < drawY || b->personY[p] >= drawY + visibleH) continue;
             VDP_setTileMapXY(BG_B, attr(PAL0, windowPersonTile(b, p)), b->personX[p], b->personY[p]);
         }
+        return;
+    }
+
+    if (isFridnasBuilding(b))
+    {
+        drawFridnasBuilding(b, visibleH, drawY);
+        drawBuildingChunks(b, visibleH, drawY);
+        if (b->cracking) drawBuildingCracks(b, visibleH);
+        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+
+        for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
+        {
+            if (!b->personAlive[p]) continue;
+            if (b->personY[p] < drawY || b->personY[p] >= drawY + visibleH) continue;
+            VDP_setTileMapXY(BG_B, attr(PAL0, windowPersonTile(b, p)), b->personX[p], b->personY[p]);
+        }
+        return;
+    }
+
+    if (isCityHallBuilding(b))
+    {
+        drawCityHallBuilding(b, visibleH, drawY);
+        drawBuildingChunks(b, visibleH, drawY);
+        if (b->cracking) drawBuildingCracks(b, visibleH);
+        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+
+        for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
+        {
+            if (!b->personAlive[p]) continue;
+            if (b->personY[p] < drawY || b->personY[p] >= drawY + visibleH) continue;
+            VDP_setTileMapXY(BG_B, attr(PAL0, windowPersonTile(b, p)), b->personX[p], b->personY[p]);
+        }
+        return;
+    }
+
+    if (isCityHallTowerBuilding(b))
+    {
+        drawCityHallTowerBuilding(b, visibleH, drawY);
+        drawBuildingChunks(b, visibleH, drawY);
+        if (b->cracking) drawBuildingCracks(b, visibleH);
+        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
         return;
     }
 
@@ -2049,7 +2295,7 @@ static void applyBuildingDamage(Building *b, u8 hitX, u8 hitY)
 
     if (b->cracking || b->collapsing) return;
 
-    if (b->damage < b->h + 2)
+    if (b->damage < buildingDamageLimit(b))
     {
         b->damageX[mark] = hitX;
         b->damageY[mark] = hitY;
@@ -2220,7 +2466,7 @@ static RoofContact getRoofContact(void)
         const s16 bTop = b->y * 8;
         if (!b->alive) continue;
         if (b->collapsing) continue;
-        if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b)) continue;
+        if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b) || isFridnasBuilding(b) || isCityHallTowerBuilding(b)) continue;
         if (center < bLeft + 4 || center > bRight - 4) continue;
         if (feet < bTop - 6 || feet > bTop + 8) continue;
 
@@ -2251,7 +2497,7 @@ static ClimbContact getClimbContact(void)
         s16 bLeft = b->x * 8;
         s16 bRight = (b->x + b->w) * 8;
         s16 bTop = b->y * 8;
-        const s16 bBottom = FLOOR_Y * 8;
+        s16 bBottom = FLOOR_Y * 8;
         if (!b->alive) continue;
         if (b->collapsing) continue;
 
@@ -2261,11 +2507,16 @@ static ClimbContact getClimbContact(void)
             bRight = (b->x + 4) * 8;
             bTop = (b->y + 5) * 8;
         }
+        if (isCityHallTowerBuilding(b))
+        {
+            bBottom = (b->y + b->h) * 8;
+        }
 
         if (feet < bTop - 6 || top > bBottom) continue;
 
         if (right >= bLeft - 6 && right <= bLeft + 10)
         {
+            if (isBehindStandingCityHall(b, bLeft)) continue;
             contact.active = TRUE;
             contact.snapX = bLeft - PLAYER_W + 4;
             contact.attackDir = 1;
@@ -2275,6 +2526,7 @@ static ClimbContact getClimbContact(void)
 
         if (left <= bRight + 6 && left >= bRight - 10)
         {
+            if (isBehindStandingCityHall(b, bRight)) continue;
             contact.active = TRUE;
             contact.snapX = bRight - 4;
             contact.attackDir = -1;
@@ -2361,7 +2613,7 @@ static void updatePlayer(u16 joy, u16 pressed)
             player.y = climbTopY;
             player.vy = 0;
             climbing = FALSE;
-            if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b))
+            if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b) || isFridnasBuilding(b) || isCityHallTowerBuilding(b))
             {
                 player.x = climbContact.snapX;
                 player.grounded = FALSE;
@@ -2377,8 +2629,17 @@ static void updatePlayer(u16 joy, u16 pressed)
             }
         }
     }
-    else if ((joy & BUTTON_DOWN) && onFacade && player.y < PLAYER_GROUND_Y)
+    else if ((joy & BUTTON_DOWN) && (onFacade || (onRoof && climbContact.active)) && player.y < PLAYER_GROUND_Y)
     {
+        if (onRoof)
+        {
+            player.x = climbContact.snapX;
+            player.dir = climbContact.attackDir;
+            player.grounded = FALSE;
+            player.walking = FALSE;
+            onRoof = FALSE;
+            onFacade = TRUE;
+        }
         player.y += 2;
         player.climbPose = POSE_CLIMB_DOWN;
         if (player.y >= PLAYER_GROUND_Y)
