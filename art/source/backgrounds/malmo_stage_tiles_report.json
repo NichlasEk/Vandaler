@@ -1,7 +1,7 @@
 {
   "palette_colors": 16,
-  "tile_count": 108,
-  "unique_tile_count": 107,
+  "tile_count": 109,
+  "unique_tile_count": 108,
   "tiles": [
     {
       "name": "tileSky",
@@ -846,6 +846,14 @@
       "used_indices": [
         1,
         6
+      ]
+    },
+    {
+      "name": "tileWaterFist",
+      "used_indices": [
+        0,
+        7,
+        13
       ]
     }
   ]
