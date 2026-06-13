@@ -69,13 +69,11 @@ def sheet(frames: list[Image.Image], frame_w: int, frame_h: int) -> Image.Image:
 def write_monster_cycles() -> None:
     for monster in ("jonny", "conny", "bettan"):
         root = MONSTER_ROOT / monster
-        walk_a = boost(rgba(root / "walk_a.png"))
-        walk_b = boost(rgba(root / "walk_b.png"))
+        walk_a = rgba(root / "walk_a.png")
+        walk_b = rgba(root / "walk_b.png")
         # Keep the two trusted poses, then add conservative in-betweens.
         walk_c = stable_bob(walk_a, dx=1, dy=-1, split=0.72)
         walk_d = stable_bob(walk_b, dx=-1, dy=-1, split=0.72)
-        walk_a.save(root / "walk_a.png")
-        walk_b.save(root / "walk_b.png")
         walk_c.save(root / "walk_c.png")
         walk_d.save(root / "walk_d.png")
 

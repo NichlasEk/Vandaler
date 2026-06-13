@@ -1,6 +1,7 @@
 #include <genesis.h>
 #include <psg.h>
 #include "resources.h"
+#include "stage_tiles.h"
 
 #define SCREEN_TILES_W 40
 #define SCREEN_TILES_H 28
@@ -106,6 +107,20 @@
 #define TILE_CURB        (TILE_USER_INDEX + 32)
 #define TILE_ROAD_DARK   (TILE_USER_INDEX + 33)
 #define TILE_STREET_LAMP (TILE_USER_INDEX + 34)
+#define TILE_FACADE_GLASS (TILE_USER_INDEX + 35)
+#define TILE_FACADE_CONCRETE_DARK (TILE_USER_INDEX + 36)
+#define TILE_FACADE_BRICK_LIGHT (TILE_USER_INDEX + 37)
+#define TILE_SHOP_FRONT  (TILE_USER_INDEX + 38)
+#define TILE_ROOF_DARK   (TILE_USER_INDEX + 39)
+#define TILE_ROOF_CAP    (TILE_USER_INDEX + 40)
+#define TILE_WIN_LIT     (TILE_USER_INDEX + 41)
+#define TILE_WIN_BROKEN  (TILE_USER_INDEX + 42)
+#define TILE_DAMAGE_SMALL (TILE_USER_INDEX + 43)
+#define TILE_DAMAGE_HOLE (TILE_USER_INDEX + 44)
+#define TILE_DAMAGE_RUBBLE (TILE_USER_INDEX + 45)
+#define TILE_AIRCON      (TILE_USER_INDEX + 46)
+#define TILE_SIGN        (TILE_USER_INDEX + 47)
+#define TILE_PIPE        (TILE_USER_INDEX + 48)
 
 typedef enum
 {
@@ -258,62 +273,6 @@ typedef struct
     s16 y;
     u8 building;
 } RoofContact;
-
-static const u32 tileSky[8]     = {0x11111111,0x111C1111,0x11111111,0x111111C1,0x11111111,0x11C11111,0x11111111,0x11111C11};
-static const u32 tileDark[8]    = {0xBBBBBBBB,0xB2B2B2B2,0xBBBBBBBB,0x2B2B2B2B,0xBBBBBBBB,0xB2B2B2B2,0xBBBBBBBB,0x2B2B2B2B};
-static const u32 tileRoad[8]    = {0x3B333333,0x333333B3,0x333B3333,0x33333333,0xB333333B,0x33333B33,0x33333333,0x33B33333};
-static const u32 tileLine[8]    = {0x33333333,0x33333333,0x33333333,0x99999999,0x99999999,0x33333333,0x33333333,0x33333333};
-static const u32 tileGreen[8]   = {0x00044000,0x004C4400,0x04444440,0x0C4444C0,0x00444400,0x000A0000,0x000A0000,0x000A0000};
-static const u32 tileWinOn[8]   = {0x00000000,0x02222200,0x02666200,0x026C6200,0x02666200,0x02222200,0x00000000,0x00000000};
-static const u32 tileWinOff[8]  = {0x00000000,0x02222200,0x02222200,0x02000200,0x02000200,0x02222200,0x00000000,0x00000000};
-static const u32 tileCrack[8]   = {0x00080000,0x00028000,0x00888000,0x08820000,0x00288000,0x00028800,0x00008000,0x00000000};
-static const u32 tileCrackSmall[8] = {0x00000000,0x00080000,0x00088000,0x00028000,0x00008800,0x00000800,0x00000000,0x00000000};
-static const u32 tileCrackMid[8]   = {0x00080000,0x00088000,0x00828000,0x08880000,0x00288000,0x00028800,0x00008000,0x00000000};
-static const u32 tileCrackLarge[8] = {0x80008000,0x88088000,0x02880000,0x08888200,0x00288000,0x08228800,0x88008000,0x80000080};
-static const u32 tileDust1[8]   = {0x00000000,0x00000000,0x00000000,0x90909090,0x09999990,0x999F9999,0x09F99990,0x00000000};
-static const u32 tileDust2[8]   = {0x00000000,0x00000000,0x09090000,0x99999990,0x9F9F9F99,0x99999999,0x09999900,0x00000000};
-static const u32 tileDust3[8]   = {0x00000000,0x09009000,0x99999909,0x9F999999,0x999F9F99,0x09999990,0x00099000,0x00000000};
-static const u32 tileRed[8]     = {0x88888888,0x8D8D8D8D,0xDDDDDDDD,0x88888888,0x8D8D8D8D,0xDDDDDDDD,0x88888888,0x88888888};
-static const u32 tileWhite[8]   = {0x99999999,0x9F9F9F9F,0xFFFFFFFF,0x99999999,0x99999999,0xFFFFFFFF,0x9F9F9F9F,0x99999999};
-static const u32 tileYellow[8]  = {0xDDDDDDDD,0xD77777DD,0xD77777DD,0xD7777DDD,0xD77777DD,0xD77777DD,0xDD7777DD,0xDDDDDDDD};
-static const u32 tileARing[8]   = {0x000FF000,0x00F00F00,0x000FF000,0x00F00F00,0x0F0000F0,0x0FFFFFF0,0x0F0000F0,0x0F0000F0};
-static const u32 tileAUml[8]    = {0x00F00F00,0x00000000,0x00F00F00,0x0F0000F0,0x0FFFFFF0,0x0F0000F0,0x0F0000F0,0x00000000};
-static const u32 tileOUml[8]    = {0x00F00F00,0x00000000,0x00FFFF00,0x0F0000F0,0x0F0000F0,0x0F0000F0,0x00FFFF00,0x00000000};
-static const u32 tileSkyTop[8]  = {0xCCCCCCCC,0xCCCCCC1C,0xCCCCCCCC,0xCC1CCCCC,0xCCCCCCCC,0xCCCCCCCC,0xCCCC1CCC,0xCCCCCCCC};
-static const u32 tileSkyMid[8]  = {0x11111111,0x111111C1,0x11111111,0x11C11111,0x11111111,0x111C1111,0x11111111,0x11111111};
-static const u32 tileSkyLow[8]  = {0x16111161,0x11161111,0x11111111,0x11611111,0x11111161,0x11111111,0x11161111,0x61111111};
-static const u32 tileCloud[8]   = {0x00000000,0x00066600,0x00666660,0x06699960,0x00666660,0x00066600,0x00000000,0x00000000};
-static const u32 tileFarTower[8] = {0xCCCCCCCC,0xCBBCCBBC,0xCBCBCBCB,0xCBBCCBBC,0xCBCBCBCB,0xCBBCCBBC,0xCBCBCBCB,0xBBBBBBBB};
-static const u32 tileFarLit[8]  = {0xBBBBBBBB,0xBBDBBBDB,0xBBBBBBBB,0xBDBBBDBB,0xBBBBBBBB,0xBBDBBBDB,0xBBBBBBBB,0xBBBBBBBB};
-static const u32 tileFacadeGrey[8] = {0x33333333,0x3F3F3333,0x33333333,0x33333F3F,0x33333333,0x3F33333F,0x33333333,0x333F3333};
-static const u32 tileFacadeBrick[8] = {0x777A7777,0x777777A7,0x7D777777,0x7777D777,0x77777777,0x77A77777,0x777777D7,0xA7777777};
-static const u32 tileFacadeDark[8] = {0xBBBB2BBB,0xB2BBBBBB,0xBBBBBBB2,0xBB2BBBBB,0xBBBB2BBB,0xBBBBBBBB,0xB2BBBB2B,0xBBBBBBBB};
-static const u32 tileRoof[8]    = {0x88888888,0x8DDDDDD8,0x88888888,0x8A8A8A88,0xAAAAAAAA,0x77777777,0x77777777,0x77777777};
-static const u32 tileDoor[8]    = {0xBBBBBBBB,0xB777777B,0xB7AAAA7B,0xB7A00A7B,0xB7A00A7B,0xB7AAAA7B,0xB777777B,0xBBBBBBBB};
-static const u32 tileSidewalk[8] = {0x99999999,0x9F9F9F9F,0x33333333,0x3F333F33,0x33333333,0x333F3333,0x33333333,0x3F33333F};
-static const u32 tileCurb[8]    = {0xFFFFFFFF,0x99999999,0x33333333,0x33333333,0xBBBBBBBB,0xBBBBBBBB,0xBBBBBBBB,0xBBBBBBBB};
-static const u32 tileRoadDark[8] = {0xB3B33333,0x333B333B,0x33333333,0x3B3333B3,0x33333333,0x333B3333,0xB333333B,0x33333333};
-static const u32 tileStreetLamp[8] = {0x000DD000,0x000DD000,0x000BB000,0x000BB000,0x000BB000,0x000BB000,0x00BBBB00,0x000BB000};
-
-static const u16 palette0[16] =
-{
-    RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(0,2,7),
-    RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(4,4,5),
-    RGB3_3_3_TO_VDPCOLOR(0,6,1),
-    RGB3_3_3_TO_VDPCOLOR(0,3,1),
-    RGB3_3_3_TO_VDPCOLOR(2,5,7),
-    RGB3_3_3_TO_VDPCOLOR(5,3,1),
-    RGB3_3_3_TO_VDPCOLOR(7,1,0),
-    RGB3_3_3_TO_VDPCOLOR(7,7,7),
-    RGB3_3_3_TO_VDPCOLOR(2,1,0),
-    RGB3_3_3_TO_VDPCOLOR(1,1,2),
-    RGB3_3_3_TO_VDPCOLOR(0,0,4),
-    RGB3_3_3_TO_VDPCOLOR(7,5,1),
-    RGB3_3_3_TO_VDPCOLOR(0,0,0),
-    RGB3_3_3_TO_VDPCOLOR(7,7,7)
-};
 
 static const u16 paletteApe[16] =
 {
@@ -523,7 +482,6 @@ static void loadTiles(void)
     VDP_loadTileData(tileSkyTop, TILE_SKY_TOP, 1, DMA);
     VDP_loadTileData(tileSkyMid, TILE_SKY_MID, 1, DMA);
     VDP_loadTileData(tileSkyLow, TILE_SKY_LOW, 1, DMA);
-    VDP_loadTileData(tileCloud, TILE_CLOUD, 1, DMA);
     VDP_loadTileData(tileFarTower, TILE_FAR_TOWER, 1, DMA);
     VDP_loadTileData(tileFarLit, TILE_FAR_LIT, 1, DMA);
     VDP_loadTileData(tileFacadeGrey, TILE_FACADE_GREY, 1, DMA);
@@ -535,6 +493,20 @@ static void loadTiles(void)
     VDP_loadTileData(tileCurb, TILE_CURB, 1, DMA);
     VDP_loadTileData(tileRoadDark, TILE_ROAD_DARK, 1, DMA);
     VDP_loadTileData(tileStreetLamp, TILE_STREET_LAMP, 1, DMA);
+    VDP_loadTileData(tileFacadeGlass, TILE_FACADE_GLASS, 1, DMA);
+    VDP_loadTileData(tileFacadeConcreteDark, TILE_FACADE_CONCRETE_DARK, 1, DMA);
+    VDP_loadTileData(tileFacadeBrickLight, TILE_FACADE_BRICK_LIGHT, 1, DMA);
+    VDP_loadTileData(tileShopFront, TILE_SHOP_FRONT, 1, DMA);
+    VDP_loadTileData(tileRoofDark, TILE_ROOF_DARK, 1, DMA);
+    VDP_loadTileData(tileRoofCap, TILE_ROOF_CAP, 1, DMA);
+    VDP_loadTileData(tileWinLit, TILE_WIN_LIT, 1, DMA);
+    VDP_loadTileData(tileWinBroken, TILE_WIN_BROKEN, 1, DMA);
+    VDP_loadTileData(tileDamageSmall, TILE_DAMAGE_SMALL, 1, DMA);
+    VDP_loadTileData(tileDamageHole, TILE_DAMAGE_HOLE, 1, DMA);
+    VDP_loadTileData(tileDamageRubble, TILE_DAMAGE_RUBBLE, 1, DMA);
+    VDP_loadTileData(tileAircon, TILE_AIRCON, 1, DMA);
+    VDP_loadTileData(tileSign, TILE_SIGN, 1, DMA);
+    VDP_loadTileData(tilePipe, TILE_PIPE, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -626,9 +598,7 @@ static void drawSkyline(void)
 
 static void drawRoad(void)
 {
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_SIDEWALK), 0, FLOOR_Y - 1, SCREEN_TILES_W, 1);
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_CURB), 0, FLOOR_Y, SCREEN_TILES_W, 1);
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROAD_DARK), 0, FLOOR_Y + 1, SCREEN_TILES_W, 3);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROAD_DARK), 0, FLOOR_Y, SCREEN_TILES_W, 4);
     for (u8 x = 1; x < SCREEN_TILES_W; x += 6)
     {
         VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_LINE), x, FLOOR_Y + 2, 3, 1);
@@ -718,14 +688,17 @@ static void drawDamageTile(u8 x, u8 y, u8 tile)
 
 static void drawCollapseDust(const Building *b, u8 y, u8 phase)
 {
+    (void)phase;
+
     if (y < HUD_TILES_H) y = HUD_TILES_H;
     if (y >= FLOOR_Y) y = FLOOR_Y - 1;
 
     for (u8 xx = 0; xx < b->w; xx++)
     {
-        const u8 dust = TILE_DUST_1 + ((xx + phase) % 3);
+        const u8 dustPattern = xx + b->x;
+        const u8 dust = TILE_DUST_1 + (dustPattern % 3);
         drawDamageTile(b->x + xx, y, dust);
-        if ((xx + phase) & 1) drawDamageTile(b->x + xx, y + 1, TILE_DUST_1 + ((xx + phase + 1) % 3));
+        if (dustPattern & 1) drawDamageTile(b->x + xx, y + 1, TILE_DUST_1 + ((dustPattern + 1) % 3));
     }
 }
 
@@ -741,40 +714,74 @@ static void drawBuildingCracks(const Building *b, u8 visibleH)
         const u8 rel = yy - b->y;
         if (rel == 0 || rel >= visibleH) continue;
 
-        const u8 xA = b->x + 1 + ((yy + b->crackRows) % (b->w - 1));
-        const u8 xB = b->x + ((yy + b->crackRows + 2) % b->w);
+        const u8 xA = b->x + 1 + (((rel * 2) + b->x) % (b->w - 1));
+        const u8 xB = b->x + ((rel + b->x + 2) % b->w);
         drawDamageTile(xA, yy, (rel & 1) ? TILE_CRACK_SMALL : TILE_CRACK_MID);
         if ((b->crackRows > 5) && ((yy + b->x) & 1)) drawDamageTile(xB, yy, TILE_CRACK_SMALL);
     }
 
 }
 
+static void drawBuildingDamageMark(const Building *b, u8 d, u8 visibleH, u8 drawY)
+{
+    const u8 cx = b->damageX[d];
+    const u8 cy = b->damageY[d];
+    if (cy < drawY || cy >= drawY + visibleH) return;
+
+    const u8 severity = d > 7 ? 2 : (d > 3 ? 1 : 0);
+    const u8 centerTile = severity == 0 ? TILE_DAMAGE_SMALL : (severity == 1 ? TILE_DAMAGE_HOLE : TILE_DAMAGE_RUBBLE);
+
+    drawDamageTile(cx, cy, centerTile);
+    if (cx > b->x && (d & 1)) drawDamageTile(cx - 1, cy, severity == 0 ? TILE_CRACK_SMALL : TILE_WIN_BROKEN);
+    if (cx + 1 < b->x + b->w && (d & 2)) drawDamageTile(cx + 1, cy, severity == 2 ? TILE_DAMAGE_HOLE : TILE_DAMAGE_SMALL);
+    if (cy + 1 < drawY + visibleH) drawDamageTile(cx, cy + 1, severity == 2 ? TILE_DAMAGE_RUBBLE : TILE_WIN_BROKEN);
+    if (cy > drawY && (d & 3) == 0) drawDamageTile(cx, cy - 1, severity == 0 ? TILE_CRACK_SMALL : TILE_DAMAGE_SMALL);
+}
+
 static void drawBuildingChunks(const Building *b, u8 visibleH, u8 drawY)
 {
     for (u8 d = 0; d < b->damage && d < MAX_DAMAGE_MARKS; d++)
-    {
-        const u8 cx = b->damageX[d];
-        const u8 cy = b->damageY[d];
-        if (cy < drawY || cy >= drawY + visibleH) continue;
+        drawBuildingDamageMark(b, d, visibleH, drawY);
+}
 
-        drawDamageTile(cx, cy, TILE_DARK);
-        if (cx > b->x && (d & 1)) drawDamageTile(cx - 1, cy, TILE_WIN_OFF);
-        if (cx + 1 < b->x + b->w && (d & 2)) drawDamageTile(cx + 1, cy, TILE_DARK);
-        if (cy + 1 < drawY + visibleH) drawDamageTile(cx, cy + 1, (d & 1) ? TILE_DARK : TILE_WIN_OFF);
-        if (cy > drawY && (d & 3) == 0) drawDamageTile(cx, cy - 1, TILE_WIN_OFF);
-    }
+static u8 buildingStyle(const Building *b)
+{
+    return ((b->x / 2) + b->w + b->h) & 3;
 }
 
 static u8 buildingBodyTile(const Building *b)
 {
-    if ((b->x & 3) == 0) return TILE_FACADE_GREY;
-    if ((b->x & 1) == 0) return TILE_FACADE_BRICK;
-    return TILE_YELLOW;
+    switch (buildingStyle(b))
+    {
+        case 0: return TILE_FACADE_BRICK_LIGHT;
+        case 1: return TILE_FACADE_GREY;
+        case 2: return TILE_FACADE_GLASS;
+        default: return TILE_YELLOW;
+    }
 }
 
 static u8 buildingShadeTile(const Building *b)
 {
-    return ((b->x + b->w) & 1) ? TILE_FACADE_DARK : TILE_DARK;
+    return buildingStyle(b) == 2 ? TILE_FACADE_DARK : TILE_FACADE_CONCRETE_DARK;
+}
+
+static u8 buildingAccentTile(const Building *b)
+{
+    switch (buildingStyle(b))
+    {
+        case 0: return TILE_FACADE_BRICK;
+        case 1: return TILE_FACADE_CONCRETE_DARK;
+        case 2: return TILE_FACADE_DARK;
+        default: return TILE_FACADE_BRICK_LIGHT;
+    }
+}
+
+static u8 buildingWindowTile(const Building *b, u8 xx, u8 yy)
+{
+    const bool broken = ((xx + yy + b->x) & 5) == 0;
+    if (broken) return TILE_WIN_BROKEN;
+    if ((((xx * 3) + yy + b->x) & 7) == 0) return TILE_WIN_OFF;
+    return buildingStyle(b) == 2 ? TILE_WIN_LIT : TILE_WIN_ON;
 }
 
 static void drawBuilding(const Building *b)
@@ -791,30 +798,43 @@ static void drawBuilding(const Building *b)
 
     const u8 bodyTile = buildingBodyTile(b);
     const u8 shadeTile = buildingShadeTile(b);
+    const u8 accentTile = buildingAccentTile(b);
+    const u8 roofTile = buildingStyle(b) == 2 ? TILE_ROOF_DARK : TILE_ROOF;
+
     VDP_fillTileMapRect(BG_B, attr(PAL0, bodyTile), b->x, drawY, b->w, visibleH);
-    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROOF), b->x, drawY, b->w, 1);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, roofTile), b->x, drawY, b->w, 1);
+    if (!b->collapsing) VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROOF_CAP), b->x, drawY, b->w, 1);
     VDP_fillTileMapRect(BG_B, attr(PAL0, shadeTile), b->x, drawY, 1, visibleH);
     if (!b->collapsing && visibleH > 2) VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_RED), b->x + 1, drawY + visibleH - 2, b->w - 2, 1);
     if (b->w > 4 && visibleH > 2)
     {
-        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_FACADE_DARK), b->x + b->w - 1, drawY + 1, 1, visibleH - 2);
+        VDP_fillTileMapRect(BG_B, attr(PAL0, accentTile), b->x + b->w - 1, drawY + 1, 1, visibleH - 2);
+    }
+    for (u8 yy = 3; yy + 1 < visibleH; yy += 3)
+    {
+        VDP_fillTileMapRect(BG_B, attr(PAL0, accentTile), b->x + 1, drawY + yy, b->w - 1, 1);
     }
     for (u8 yy = 1; yy < visibleH; yy += 2)
     {
         for (u8 xx = 1; xx + 1 < b->w; xx += 2)
         {
-            const bool broken = ((xx + yy + b->x) & 5) == 0;
-            VDP_setTileMapXY(BG_B, attr(PAL0, broken ? TILE_WIN_OFF : TILE_WIN_ON), b->x + xx, drawY + yy);
-            if (!broken && (xx + 1 < b->w) && (((xx * 3) + yy + b->x) & 7) == 0)
+            const u8 winTile = buildingWindowTile(b, xx, yy);
+            VDP_setTileMapXY(BG_B, attr(PAL0, winTile), b->x + xx, drawY + yy);
+            if (xx + 1 < b->w && winTile != TILE_WIN_BROKEN && (((xx * 3) + yy + b->x) & 7) == 0)
             {
-                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WIN_OFF), b->x + xx + 1, drawY + yy);
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_AIRCON), b->x + xx + 1, drawY + yy);
             }
         }
     }
     if (!b->collapsing && visibleH > 5 && b->w > 3)
     {
-        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_DOOR), b->x + 1, drawY + visibleH - 1);
-        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_FACADE_DARK), b->x + 2, drawY + visibleH - 1);
+        VDP_setTileMapXY(BG_B, attr(PAL0, buildingStyle(b) == 2 ? TILE_SHOP_FRONT : TILE_DOOR), b->x + 1, drawY + visibleH - 1);
+        VDP_setTileMapXY(BG_B, attr(PAL0, buildingStyle(b) == 0 ? TILE_SIGN : TILE_SHOP_FRONT), b->x + 2, drawY + visibleH - 1);
+    }
+    if (!b->collapsing && visibleH > 7 && b->w > 4)
+    {
+        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_PIPE), b->x + b->w - 2, drawY + 2);
+        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_PIPE), b->x + b->w - 2, drawY + 3);
     }
     drawBuildingChunks(b, visibleH, drawY);
     if (b->cracking) drawBuildingCracks(b, visibleH);
@@ -1712,6 +1732,7 @@ static void applyBuildingDamage(Building *b, u8 hitX, u8 hitY)
         b->damage++;
         score += 10;
         playTone(80 + (b->damage * 4), 9);
+        drawBuildingDamageMark(b, mark, b->h, b->y);
     }
     else
     {
@@ -1720,8 +1741,8 @@ static void applyBuildingDamage(Building *b, u8 hitX, u8 hitY)
         b->crackRows = 1;
         score += 100;
         playTone(54, 14);
+        drawBuildings();
     }
-    drawBuildings();
     drawHud();
 }
 
