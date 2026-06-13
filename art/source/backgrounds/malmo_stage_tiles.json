@@ -577,6 +577,76 @@
       "33333F99",
       "333333F9",
       "3333333F"
+    ],
+    "tileWaterBrick": [
+      "777A7777",
+      "7A77777A",
+      "77777777",
+      "A777A777",
+      "7777777A",
+      "77A77777",
+      "77777777",
+      "7A777A77"
+    ],
+    "tileWaterBand": [
+      "FFFFFFFF",
+      "99999999",
+      "777A7777",
+      "77777777",
+      "FFFFFFFF",
+      "99999999",
+      "7777777A",
+      "77777777"
+    ],
+    "tileWaterArch": [
+      "7FFFFFF7",
+      "F999999F",
+      "F7B7B7BF",
+      "F7B7B7BF",
+      "F7B7B7BF",
+      "F7B7B7BF",
+      "F999999F",
+      "7FFFFFF7"
+    ],
+    "tileWaterRoofLeft": [
+      "00000000",
+      "00000000",
+      "0000000B",
+      "00000BBB",
+      "000BBBBB",
+      "00BBBBBB",
+      "0BBBABBB",
+      "BBBBBBBB"
+    ],
+    "tileWaterRoofMid": [
+      "000BB000",
+      "00BBBB00",
+      "0BBBBBB0",
+      "BBBBBBBB",
+      "BBABABBB",
+      "BABBBABB",
+      "BBBBBBBB",
+      "AABBBBAA"
+    ],
+    "tileWaterRoofRight": [
+      "00000000",
+      "00000000",
+      "B0000000",
+      "BBB00000",
+      "BBBBB000",
+      "BBBBBB00",
+      "BBBABBB0",
+      "BBBBBBBB"
+    ],
+    "tileWaterSpire": [
+      "000B0000",
+      "000B0000",
+      "000B0000",
+      "000B0000",
+      "000B0000",
+      "000B0000",
+      "000A0000",
+      "000B0000"
     ]
   }
 }

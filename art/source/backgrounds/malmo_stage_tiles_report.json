@@ -1,7 +1,7 @@
 {
   "palette_colors": 16,
-  "tile_count": 56,
-  "unique_tile_count": 56,
+  "tile_count": 63,
+  "unique_tile_count": 63,
   "tiles": [
     {
       "name": "tileSky",
@@ -439,6 +439,63 @@
         3,
         9,
         15
+      ]
+    },
+    {
+      "name": "tileWaterBrick",
+      "used_indices": [
+        7,
+        10
+      ]
+    },
+    {
+      "name": "tileWaterBand",
+      "used_indices": [
+        7,
+        9,
+        10,
+        15
+      ]
+    },
+    {
+      "name": "tileWaterArch",
+      "used_indices": [
+        7,
+        9,
+        11,
+        15
+      ]
+    },
+    {
+      "name": "tileWaterRoofLeft",
+      "used_indices": [
+        0,
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileWaterRoofMid",
+      "used_indices": [
+        0,
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileWaterRoofRight",
+      "used_indices": [
+        0,
+        10,
+        11
+      ]
+    },
+    {
+      "name": "tileWaterSpire",
+      "used_indices": [
+        0,
+        10,
+        11
       ]
     }
   ]

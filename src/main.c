@@ -129,6 +129,13 @@
 #define TILE_TORSO_GLASS     (TILE_USER_INDEX + 54)
 #define TILE_TORSO_RIB       (TILE_USER_INDEX + 55)
 #define TILE_TORSO_RIB_BACK  (TILE_USER_INDEX + 56)
+#define TILE_WATER_BRICK     (TILE_USER_INDEX + 57)
+#define TILE_WATER_BAND      (TILE_USER_INDEX + 58)
+#define TILE_WATER_ARCH      (TILE_USER_INDEX + 59)
+#define TILE_WATER_ROOF_LEFT (TILE_USER_INDEX + 60)
+#define TILE_WATER_ROOF_MID  (TILE_USER_INDEX + 61)
+#define TILE_WATER_ROOF_RIGHT (TILE_USER_INDEX + 62)
+#define TILE_WATER_SPIRE     (TILE_USER_INDEX + 63)
 
 typedef enum
 {
@@ -523,6 +530,13 @@ static void loadTiles(void)
     VDP_loadTileData(tileTorsoGlass, TILE_TORSO_GLASS, 1, DMA);
     VDP_loadTileData(tileTorsoRib, TILE_TORSO_RIB, 1, DMA);
     VDP_loadTileData(tileTorsoRibBack, TILE_TORSO_RIB_BACK, 1, DMA);
+    VDP_loadTileData(tileWaterBrick, TILE_WATER_BRICK, 1, DMA);
+    VDP_loadTileData(tileWaterBand, TILE_WATER_BAND, 1, DMA);
+    VDP_loadTileData(tileWaterArch, TILE_WATER_ARCH, 1, DMA);
+    VDP_loadTileData(tileWaterRoofLeft, TILE_WATER_ROOF_LEFT, 1, DMA);
+    VDP_loadTileData(tileWaterRoofMid, TILE_WATER_ROOF_MID, 1, DMA);
+    VDP_loadTileData(tileWaterRoofRight, TILE_WATER_ROOF_RIGHT, 1, DMA);
+    VDP_loadTileData(tileWaterSpire, TILE_WATER_SPIRE, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -671,8 +685,12 @@ static void initBuildings(void)
         {
             buildings[i].h = 16;
         }
+        if (currentCity == 1 && i == 1)
+        {
+            buildings[i].h = 17;
+        }
         buildings[i].y = FLOOR_Y - hs[i];
-        if (currentCity == 0 && i == 1)
+        if ((currentCity == 0 || currentCity == 1) && i == 1)
         {
             buildings[i].y = FLOOR_Y - buildings[i].h;
         }
@@ -685,7 +703,7 @@ static void initBuildings(void)
         for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
         {
             const u8 col = 1 + ((p & 1) * 2);
-            const u8 row = 1 + ((p / 2) * 2);
+            const u8 row = (currentCity == 1 && i == 1) ? 7 + ((p / 2) * 3) : 1 + ((p / 2) * 2);
             buildings[i].personX[p] = buildings[i].x + (col < buildings[i].w ? col : 1);
             buildings[i].personY[p] = buildings[i].y + (row < buildings[i].h ? row : 1);
             buildings[i].personAlive[p] = (buildings[i].personY[p] < FLOOR_Y - 1);
@@ -823,6 +841,17 @@ static bool isTurningTorsoBuilding(const Building *b)
     return currentCity == 0 && b == &buildings[1];
 }
 
+static bool isOldWaterTowerBuilding(const Building *b)
+{
+    return currentCity == 1 && b == &buildings[1];
+}
+
+static s16 climbTopYForBuilding(const Building *b)
+{
+    const u8 topRow = isOldWaterTowerBuilding(b) ? b->y + 3 : b->y;
+    return (topRow * 8) - PLAYER_H;
+}
+
 static void drawTurningTorsoBuilding(const Building *b, u8 visibleH, u8 drawY)
 {
     const s8 offsets[8] = {1, 1, 0, -1, -1, 0, 1, 1};
@@ -857,6 +886,66 @@ static void drawTurningTorsoBuilding(const Building *b, u8 visibleH, u8 drawY)
     }
 }
 
+static void drawOldWaterTowerBuilding(const Building *b, u8 visibleH, u8 drawY)
+{
+    for (u8 yy = 0; yy < visibleH; yy++)
+    {
+        const u8 worldY = drawY + yy;
+        const u8 rel = worldY - b->y;
+
+        if (rel == 0)
+        {
+            if (!b->collapsing && worldY > HUD_TILES_H)
+            {
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_SPIRE), b->x + 2, worldY - 1);
+            }
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ROOF_MID), b->x + 2, worldY);
+            continue;
+        }
+        if (rel == 1)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ROOF_LEFT), b->x + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ROOF_MID), b->x + 2, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ROOF_RIGHT), b->x + 3, worldY);
+            continue;
+        }
+        if (rel == 2)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ROOF_LEFT), b->x, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ROOF_MID), b->x + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ROOF_MID), b->x + 2, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ROOF_MID), b->x + 3, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ROOF_RIGHT), b->x + 4, worldY);
+            continue;
+        }
+
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WATER_BRICK), b->x, worldY, b->w, 1);
+
+        if (rel == 3 || rel == 6 || rel == 9 || rel == 15)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WATER_BAND), b->x, worldY, b->w, 1);
+            continue;
+        }
+
+        if (rel == 4 || rel == 5)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ARCH), b->x + 1, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ARCH), b->x + 2, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WATER_ARCH), b->x + 3, worldY);
+            continue;
+        }
+
+        if (rel == visibleH - 1)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_DOOR), b->x + 2, worldY);
+        }
+        else if (rel > 7 && (rel & 1))
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WIN_OFF), b->x + 2, worldY);
+        }
+    }
+}
+
 static void drawBuilding(const Building *b)
 {
     if (!b->alive && !b->collapsing) return;
@@ -876,6 +965,22 @@ static void drawBuilding(const Building *b)
     if (isTurningTorsoBuilding(b))
     {
         drawTurningTorsoBuilding(b, visibleH, drawY);
+        drawBuildingChunks(b, visibleH, drawY);
+        if (b->cracking) drawBuildingCracks(b, visibleH);
+        if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
+
+        for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
+        {
+            if (!b->personAlive[p]) continue;
+            if (b->personY[p] < drawY || b->personY[p] >= drawY + visibleH) continue;
+            VDP_setTileMapXY(BG_B, attr(PAL0, windowPersonTile(b, p)), b->personX[p], b->personY[p]);
+        }
+        return;
+    }
+
+    if (isOldWaterTowerBuilding(b))
+    {
+        drawOldWaterTowerBuilding(b, visibleH, drawY);
         drawBuildingChunks(b, visibleH, drawY);
         if (b->cracking) drawBuildingCracks(b, visibleH);
         if (b->collapsing) drawCollapseDust(b, FLOOR_Y - 1, b->collapseRows);
@@ -1976,6 +2081,7 @@ static RoofContact getRoofContact(void)
         const s16 bTop = b->y * 8;
         if (!b->alive) continue;
         if (b->collapsing) continue;
+        if (isOldWaterTowerBuilding(b)) continue;
         if (center < bLeft + 4 || center > bRight - 4) continue;
         if (feet < bTop - 6 || feet > bTop + 8) continue;
 
@@ -2098,21 +2204,31 @@ static void updatePlayer(u16 joy, u16 pressed)
     if (climbing && player.y > 40)
     {
         const Building *b = &buildings[climbContact.building];
-        const s16 roofY = (b->y * 8) - PLAYER_H;
+        const s16 climbTopY = climbTopYForBuilding(b);
 
         player.y -= 2;
         player.climbPose = POSE_CLIMB_UP;
-        if (player.y <= roofY)
+        if (player.y <= climbTopY)
         {
             const s16 bLeft = b->x * 8;
             const s16 bRight = (b->x + b->w) * 8;
-            player.y = roofY;
-            player.x = climbContact.attackDir > 0 ? bLeft - 20 : bRight - 28;
+            player.y = climbTopY;
             player.vy = 0;
-            player.grounded = TRUE;
-            onFacade = FALSE;
             climbing = FALSE;
-            onRoof = TRUE;
+            if (isOldWaterTowerBuilding(b))
+            {
+                player.x = climbContact.snapX;
+                player.grounded = FALSE;
+                onFacade = TRUE;
+                onRoof = FALSE;
+            }
+            else
+            {
+                player.x = climbContact.attackDir > 0 ? bLeft - 20 : bRight - 28;
+                player.grounded = TRUE;
+                onFacade = FALSE;
+                onRoof = TRUE;
+            }
         }
     }
     else if ((joy & BUTTON_DOWN) && onFacade && player.y < PLAYER_GROUND_Y)
