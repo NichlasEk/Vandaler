@@ -997,6 +997,76 @@
       "BBBBB000",
       "BBBBBB00",
       "BBBBBBB0"
+    ],
+    "tileGoatStraw": [
+      "DDDDDDDD",
+      "D7DDDD7D",
+      "DDDD7DDD",
+      "DD7DDDDD",
+      "DDDDDD7D",
+      "D7DDDDDD",
+      "DDDD7DDD",
+      "DDDDDDDD"
+    ],
+    "tileGoatDark": [
+      "BBBBBBBB",
+      "B0B0B0BB",
+      "BBBBBBBB",
+      "BB0B0B0B",
+      "BBBBBBBB",
+      "B0BB0BBB",
+      "BBBBBBBB",
+      "00000000"
+    ],
+    "tileGoatRed": [
+      "88888888",
+      "8DDDDDD8",
+      "88DDDD88",
+      "888DD888",
+      "88888888",
+      "888DD888",
+      "88DDDD88",
+      "8DDDDDD8"
+    ],
+    "tileGoatHead": [
+      "00DDDDDD",
+      "0DDDD7DD",
+      "DDDDDDDD",
+      "DDD0DDDD",
+      "DDDDDDDD",
+      "0DDDDDDD",
+      "00DDDDDD",
+      "000DDDDD"
+    ],
+    "tileGoatHorn": [
+      "00000DDD",
+      "0000DDDD",
+      "000DDDDD",
+      "00DDDD00",
+      "0DDDD000",
+      "DDDD0000",
+      "DDD00000",
+      "DD000000"
+    ],
+    "tileGoatBurn": [
+      "BBBBBBBB",
+      "B0B6B0BB",
+      "BB0B0BBB",
+      "B6BBBB0B",
+      "BBBB0BBB",
+      "B0BBB6BB",
+      "BBBBBBBB",
+      "0B0B0B0B"
+    ],
+    "tileGoatAsh": [
+      "33333333",
+      "3B3B3B33",
+      "333333B3",
+      "B3333333",
+      "333B3333",
+      "33B333B3",
+      "33333333",
+      "BBBBBBBB"
     ]
   }
 }

@@ -17,6 +17,10 @@
 #define MAX_EXPLOSIONS 4
 #define MAX_DAMAGE_MARKS 16
 #define MAX_WINDOW_PEOPLE 4
+#define CITY_GAVLE 6
+#define GAVLE_GOAT_INDEX 1
+#define GAVLE_ARSONIST_SPAWN_FRAMES 900
+#define GAVLE_ARSONIST_IGNITE_FRAMES 150
 #define BUILDING_CRACK_STEP_FRAMES 8
 #define BUILDING_COLLAPSE_STEP_FRAMES 6
 #define PLAYER_STUN_FRAMES 90
@@ -171,6 +175,13 @@
 #define TILE_CATHEDRAL_PORTAL_TOP (TILE_USER_INDEX + 96)
 #define TILE_CATHEDRAL_SPIRE_CAP_LEFT (TILE_USER_INDEX + 97)
 #define TILE_CATHEDRAL_SPIRE_CAP_RIGHT (TILE_USER_INDEX + 98)
+#define TILE_GOAT_STRAW      (TILE_USER_INDEX + 99)
+#define TILE_GOAT_DARK       (TILE_USER_INDEX + 100)
+#define TILE_GOAT_RED        (TILE_USER_INDEX + 101)
+#define TILE_GOAT_HEAD       (TILE_USER_INDEX + 102)
+#define TILE_GOAT_HORN       (TILE_USER_INDEX + 103)
+#define TILE_GOAT_BURN       (TILE_USER_INDEX + 104)
+#define TILE_GOAT_ASH        (TILE_USER_INDEX + 105)
 
 typedef enum
 {
@@ -305,6 +316,18 @@ typedef struct
 {
     s16 x;
     s16 y;
+    s16 speed;
+    u16 igniteTimer;
+    bool active;
+    bool igniting;
+    Sprite *sprite;
+    Sprite *flameSprite;
+} TorchGuy;
+
+typedef struct
+{
+    s16 x;
+    s16 y;
     u8 timer;
     bool active;
     Sprite *sprite;
@@ -387,6 +410,8 @@ static Tank tanks[MAX_TANKS];
 static Helicopter helis[MAX_HELIS];
 static Shot shots[MAX_SHOTS];
 static Person people[MAX_PEOPLE];
+static TorchGuy torchGuy;
+static bool gavleGoatBurned = FALSE;
 static Explosion explosions[MAX_EXPLOSIONS];
 static u8 selectedMonster = 0;
 static u8 currentCity = 0;
@@ -406,6 +431,7 @@ static bool selectOverlayVisible = FALSE;
 static ClimbContact getClimbContact(void);
 static RoofContact getRoofContact(void);
 static u8 buildingBaseY(const Building *b);
+static void spawnExplosion(s16 x, s16 y);
 static void loadTiles(void);
 static void hidePlayerSprite(void);
 static void hideThreatSprites(void);
@@ -610,6 +636,13 @@ static void loadTiles(void)
     VDP_loadTileData(tileCathedralPortalTop, TILE_CATHEDRAL_PORTAL_TOP, 1, DMA);
     VDP_loadTileData(tileCathedralSpireCapLeft, TILE_CATHEDRAL_SPIRE_CAP_LEFT, 1, DMA);
     VDP_loadTileData(tileCathedralSpireCapRight, TILE_CATHEDRAL_SPIRE_CAP_RIGHT, 1, DMA);
+    VDP_loadTileData(tileGoatStraw, TILE_GOAT_STRAW, 1, DMA);
+    VDP_loadTileData(tileGoatDark, TILE_GOAT_DARK, 1, DMA);
+    VDP_loadTileData(tileGoatRed, TILE_GOAT_RED, 1, DMA);
+    VDP_loadTileData(tileGoatHead, TILE_GOAT_HEAD, 1, DMA);
+    VDP_loadTileData(tileGoatHorn, TILE_GOAT_HORN, 1, DMA);
+    VDP_loadTileData(tileGoatBurn, TILE_GOAT_BURN, 1, DMA);
+    VDP_loadTileData(tileGoatAsh, TILE_GOAT_ASH, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -731,6 +764,11 @@ static void resetThreats(void)
         shots[i].active = FALSE;
         if (shots[i].sprite != NULL) SPR_setVisibility(shots[i].sprite, HIDDEN);
     }
+    torchGuy.active = FALSE;
+    torchGuy.igniting = FALSE;
+    torchGuy.igniteTimer = 0;
+    if (torchGuy.sprite != NULL) SPR_setVisibility(torchGuy.sprite, HIDDEN);
+    if (torchGuy.flameSprite != NULL) SPR_setVisibility(torchGuy.flameSprite, HIDDEN);
     for (u8 i = 0; i < MAX_PEOPLE; i++)
     {
         people[i].active = FALSE;
@@ -790,6 +828,12 @@ static void initBuildings(void)
             buildings[i].w = 4;
             buildings[i].h = 9;
         }
+        if (currentCity == CITY_GAVLE && i == GAVLE_GOAT_INDEX)
+        {
+            buildings[i].x = 10;
+            buildings[i].w = 14;
+            buildings[i].h = 13;
+        }
         if (currentCity == 0 && i == 1)
         {
             buildings[i].h = 16;
@@ -803,7 +847,7 @@ static void initBuildings(void)
             buildings[i].h = 16;
         }
         buildings[i].y = FLOOR_Y - hs[i];
-        if (((currentCity == 0 || currentCity == 1 || currentCity == 2 || currentCity == 4 || currentCity == 5) && i == 1) || (currentCity == 3 && i == 2))
+        if (((currentCity == 0 || currentCity == 1 || currentCity == 2 || currentCity == 4 || currentCity == 5 || currentCity == CITY_GAVLE) && i == 1) || (currentCity == 3 && i == 2))
         {
             buildings[i].y = FLOOR_Y - buildings[i].h;
         }
@@ -829,6 +873,7 @@ static void initBuildings(void)
             buildings[i].personX[p] = buildings[i].x + (personCol < buildings[i].w ? personCol : 1);
             buildings[i].personY[p] = buildings[i].y + (row < buildings[i].h ? row : 1);
             buildings[i].personAlive[p] = (buildings[i].personY[p] < FLOOR_Y - 1);
+            if (currentCity == CITY_GAVLE && i == GAVLE_GOAT_INDEX) buildings[i].personAlive[p] = FALSE;
             buildings[i].personEdible[p] = ((i + p) & 1) == 0;
         }
         buildings[i].colorPal = PAL0;
@@ -999,6 +1044,11 @@ static bool isCathedralTowerBuilding(const Building *b)
     return currentCity == 5 && (b == &buildings[2] || b == &buildings[3]);
 }
 
+static bool isGavleGoatBuilding(const Building *b)
+{
+    return currentCity == CITY_GAVLE && b == &buildings[GAVLE_GOAT_INDEX];
+}
+
 static u8 buildingBaseY(const Building *b)
 {
     if (isCityHallTowerBuilding(b) || isCathedralTowerBuilding(b)) return buildings[1].y;
@@ -1013,7 +1063,35 @@ static s16 climbTopYForBuilding(const Building *b)
 
 static u8 buildingDamageLimit(const Building *b)
 {
+    if (isGavleGoatBuilding(b)) return b->h + 8;
     return b->h + ((isCityHallBuilding(b) || isCityHallTowerBuilding(b) || isCathedralBodyBuilding(b) || isCathedralTowerBuilding(b)) ? 8 : 2);
+}
+
+static void gavleGoatClimbBounds(const Building *b, s16 *left, s16 *right, s16 *top)
+{
+    *left = (b->x + 4) * 8;
+    *right = (b->x + 12) * 8;
+    *top = (b->y + 3) * 8;
+}
+
+static bool isInsideStandingGavleGoatFront(void)
+{
+    if (currentCity != CITY_GAVLE) return FALSE;
+
+    const Building *goat = &buildings[GAVLE_GOAT_INDEX];
+    if (!goat->alive || goat->collapsing) return FALSE;
+
+    s16 goatLeft;
+    s16 goatRight;
+    s16 goatTop;
+    gavleGoatClimbBounds(goat, &goatLeft, &goatRight, &goatTop);
+
+    const s16 playerLeft = player.x;
+    const s16 playerRight = player.x + PLAYER_W;
+    const s16 playerTop = player.y;
+    const s16 playerFeet = player.y + PLAYER_H;
+
+    return playerRight > goatLeft - 8 && playerLeft < goatRight + 8 && playerFeet > goatTop && playerTop < FLOOR_Y * 8;
 }
 
 static bool isBehindStandingCityHall(const Building *b, s16 facadeX)
@@ -1476,6 +1554,66 @@ static void drawCathedralTowerBuilding(const Building *b, u8 visibleH, u8 drawY)
     }
 }
 
+static void drawGavleGoatBuilding(const Building *b, u8 visibleH, u8 drawY)
+{
+    for (u8 yy = 0; yy < visibleH; yy++)
+    {
+        const u8 worldY = drawY + yy;
+        const u8 rel = worldY - b->y;
+
+        if (rel < 3)
+        {
+            if (rel == 0)
+            {
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_GOAT_HORN), b->x + 8, worldY);
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_GOAT_HORN), b->x + 9, worldY);
+            }
+            else
+            {
+                VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_GOAT_HORN), b->x + 7, worldY, 4, 1);
+            }
+            continue;
+        }
+
+        if (rel >= 3 && rel <= 5)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_GOAT_STRAW), b->x + 6, worldY, 4, 1);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_GOAT_HEAD), b->x + 4, worldY);
+            if (rel == 5) VDP_setTileMapXY(BG_B, attr(PAL0, TILE_GOAT_RED), b->x + 6, worldY);
+            continue;
+        }
+
+        if (rel >= 6 && rel <= 9)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_GOAT_STRAW), b->x + 4, worldY, 8, 1);
+            if (rel == 7) VDP_setTileMapXY(BG_B, attr(PAL0, TILE_GOAT_RED), b->x + 8, worldY);
+            continue;
+        }
+
+        if (rel >= 10)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_GOAT_STRAW), b->x + 5, worldY, 2, 1);
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_GOAT_STRAW), b->x + 10, worldY, 2, 1);
+            if (rel == visibleH - 1)
+            {
+                VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_GOAT_DARK), b->x + 5, worldY, 2, 1);
+                VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_GOAT_DARK), b->x + 10, worldY, 2, 1);
+            }
+        }
+    }
+}
+
+static void drawGavleGoatRuin(void)
+{
+    const Building *b = &buildings[GAVLE_GOAT_INDEX];
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_GOAT_ASH), b->x + 4, FLOOR_Y - 3, 8, 2);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_GOAT_BURN), b->x + 5, FLOOR_Y - 8, 1, 5);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_GOAT_BURN), b->x + 10, FLOOR_Y - 9, 1, 6);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_GOAT_BURN), b->x + 6, FLOOR_Y - 10, 5, 1);
+    VDP_setTileMapXY(BG_B, attr(PAL0, TILE_RED), b->x + 8, FLOOR_Y - 9);
+    VDP_setTileMapXY(BG_B, attr(PAL0, TILE_RED), b->x + 6, FLOOR_Y - 6);
+}
+
 static void drawBuilding(const Building *b)
 {
     if (!b->alive && !b->collapsing) return;
@@ -1606,6 +1744,15 @@ static void drawBuilding(const Building *b)
         return;
     }
 
+    if (isGavleGoatBuilding(b))
+    {
+        drawGavleGoatBuilding(b, visibleH, drawY);
+        drawBuildingChunks(b, visibleH, drawY);
+        if (b->cracking) drawBuildingCracks(b, visibleH);
+        if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
+        return;
+    }
+
     VDP_fillTileMapRect(BG_B, attr(PAL0, bodyTile), b->x, drawY, b->w, visibleH);
     VDP_fillTileMapRect(BG_B, attr(PAL0, roofTile), b->x, drawY, b->w, 1);
     if (!b->collapsing) VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROOF_CAP), b->x, drawY, b->w, 1);
@@ -1651,7 +1798,19 @@ static void drawBuilding(const Building *b)
 static void drawBuildings(void)
 {
     drawSkyline();
-    for (u8 i = 0; i < MAX_BUILDINGS; i++) drawBuilding(&buildings[i]);
+    for (u8 i = 0; i < MAX_BUILDINGS; i++)
+    {
+        if (currentCity == CITY_GAVLE && i == GAVLE_GOAT_INDEX) continue;
+        drawBuilding(&buildings[i]);
+    }
+    if (currentCity == CITY_GAVLE && buildings[GAVLE_GOAT_INDEX].alive)
+    {
+        drawBuilding(&buildings[GAVLE_GOAT_INDEX]);
+    }
+    if (currentCity == CITY_GAVLE && gavleGoatBurned && !buildings[GAVLE_GOAT_INDEX].alive && !buildings[GAVLE_GOAT_INDEX].collapsing)
+    {
+        drawGavleGoatRuin();
+    }
     drawRoad();
 }
 
@@ -1780,6 +1939,8 @@ static void hideThreatSprites(void)
     {
         if (shots[i].sprite != NULL) SPR_setVisibility(shots[i].sprite, HIDDEN);
     }
+    if (torchGuy.sprite != NULL) SPR_setVisibility(torchGuy.sprite, HIDDEN);
+    if (torchGuy.flameSprite != NULL) SPR_setVisibility(torchGuy.flameSprite, HIDDEN);
     for (u8 i = 0; i < MAX_PEOPLE; i++)
     {
         if (people[i].sprite != NULL) SPR_setVisibility(people[i].sprite, HIDDEN);
@@ -1798,6 +1959,8 @@ static void resetSpriteEngineState(void)
     for (u8 i = 0; i < MAX_TANKS; i++) tanks[i].sprite = NULL;
     for (u8 i = 0; i < MAX_HELIS; i++) helis[i].sprite = NULL;
     for (u8 i = 0; i < MAX_SHOTS; i++) shots[i].sprite = NULL;
+    torchGuy.sprite = NULL;
+    torchGuy.flameSprite = NULL;
     for (u8 i = 0; i < MAX_PEOPLE; i++) people[i].sprite = NULL;
     for (u8 i = 0; i < MAX_EXPLOSIONS; i++) explosions[i].sprite = NULL;
 }
@@ -1896,6 +2059,27 @@ static void updateThreatSprites(void)
         }
         SPR_setVisibility(s->sprite, s->active ? VISIBLE : HIDDEN);
         if (s->active) SPR_setPosition(s->sprite, s->x, s->y);
+    }
+
+    if (torchGuy.sprite == NULL)
+    {
+        torchGuy.sprite = SPR_addSprite(&person_sprite, torchGuy.x, torchGuy.y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
+    }
+    if (torchGuy.flameSprite == NULL)
+    {
+        torchGuy.flameSprite = SPR_addSprite(&explosion_sprite, torchGuy.x, torchGuy.y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
+    }
+    SPR_setVisibility(torchGuy.sprite, torchGuy.active ? VISIBLE : HIDDEN);
+    SPR_setVisibility(torchGuy.flameSprite, torchGuy.active ? VISIBLE : HIDDEN);
+    if (torchGuy.active)
+    {
+        const s16 flameX = torchGuy.x + (torchGuy.speed < 0 ? -2 : 12);
+        const s16 flameY = torchGuy.y + GROUND_SPRITE_Y_OFFSET - 8;
+        SPR_setFrame(torchGuy.sprite, (frame >> 2) & 3);
+        SPR_setHFlip(torchGuy.sprite, torchGuy.speed < 0);
+        SPR_setPosition(torchGuy.sprite, torchGuy.x, torchGuy.y + GROUND_SPRITE_Y_OFFSET);
+        SPR_setFrame(torchGuy.flameSprite, ((frame >> (torchGuy.igniting ? 1 : 2)) & 1));
+        SPR_setPosition(torchGuy.flameSprite, flameX, flameY);
     }
 
     for (u8 i = 0; i < MAX_PEOPLE; i++)
@@ -1997,6 +2181,7 @@ static void drawIntro(void)
 
 static void startCity(void)
 {
+    gavleGoatBurned = FALSE;
     initBuildings();
     resetThreats();
     player.x = 16;
@@ -2112,6 +2297,40 @@ static void spawnPerson(s16 x, s16 y, bool falling, bool edible)
             return;
         }
     }
+}
+
+static void spawnTorchGuy(void)
+{
+    if (currentCity != CITY_GAVLE) return;
+    if (torchGuy.active) return;
+    if (!buildings[GAVLE_GOAT_INDEX].alive || buildings[GAVLE_GOAT_INDEX].collapsing || buildings[GAVLE_GOAT_INDEX].cracking) return;
+
+    const bool fromRight = ((frame >> 8) & 1) != 0;
+    torchGuy.x = fromRight ? 320 : -16;
+    torchGuy.y = (FLOOR_Y * 8) - 16;
+    torchGuy.speed = fromRight ? -1 : 1;
+    torchGuy.igniteTimer = GAVLE_ARSONIST_IGNITE_FRAMES;
+    torchGuy.active = TRUE;
+    torchGuy.igniting = FALSE;
+}
+
+static void burnGavleGoat(void)
+{
+    Building *goat = &buildings[GAVLE_GOAT_INDEX];
+    if (currentCity != CITY_GAVLE) return;
+    if (!goat->alive) return;
+
+    goat->alive = FALSE;
+    goat->cracking = FALSE;
+    goat->collapsing = FALSE;
+    goat->damage = 0;
+    gavleGoatBurned = TRUE;
+    torchGuy.active = FALSE;
+    torchGuy.igniting = FALSE;
+    spawnExplosion((goat->x + 5) * 8, (goat->y + 6) * 8);
+    spawnExplosion((goat->x + 10) * 8, (goat->y + 7) * 8);
+    playTone(24, 24);
+    drawBuildings();
 }
 
 static void releaseWindowPeopleNear(Building *b, u8 hitX, u8 hitY)
@@ -2246,6 +2465,7 @@ static void updateThreats(void)
     if ((frame & 191) == 0) spawnEnemy();
     if ((frame & 511) == 128) spawnTank();
     if ((frame % 768) == 256) spawnHelicopter();
+    if (currentCity == CITY_GAVLE && (frame % GAVLE_ARSONIST_SPAWN_FRAMES) == 240) spawnTorchGuy();
 
     for (u8 i = 0; i < MAX_ENEMIES; i++)
     {
@@ -2424,6 +2644,46 @@ static void updateThreats(void)
         }
     }
 
+    if (torchGuy.active)
+    {
+        const Building *goat = &buildings[GAVLE_GOAT_INDEX];
+        const s16 goatLeft = goat->x * 8;
+        const s16 goatRight = (goat->x + goat->w) * 8;
+        const s16 targetX = torchGuy.speed > 0 ? goatLeft - 8 : goatRight - 8;
+
+        if (!goat->alive || goat->collapsing || goat->cracking)
+        {
+            torchGuy.active = FALSE;
+        }
+        else if (!torchGuy.igniting)
+        {
+            if ((frame & 1) == 0) torchGuy.x += torchGuy.speed;
+            if ((torchGuy.speed > 0 && torchGuy.x >= targetX) || (torchGuy.speed < 0 && torchGuy.x <= targetX))
+            {
+                torchGuy.x = targetX;
+                torchGuy.igniting = TRUE;
+                torchGuy.igniteTimer = GAVLE_ARSONIST_IGNITE_FRAMES;
+                playTone(210, 6);
+            }
+            if (torchGuy.x < -40 || torchGuy.x > 340) torchGuy.active = FALSE;
+        }
+        else
+        {
+            if ((frame & 15) == 0)
+            {
+                spawnExplosion(torchGuy.x + (torchGuy.speed > 0 ? 12 : -2), torchGuy.y - 6);
+                playTone(190, 4);
+            }
+            if (torchGuy.igniteTimer > 0) torchGuy.igniteTimer--;
+            if (torchGuy.igniteTimer == 0) burnGavleGoat();
+        }
+
+        if (torchGuy.active && playerHitsRect(torchGuy.x + ENEMY_HURT_X, torchGuy.y + ENEMY_HURT_Y, ENEMY_HURT_W, ENEMY_HURT_H))
+        {
+            hitPlayer();
+        }
+    }
+
     for (u8 i = 0; i < MAX_PEOPLE; i++)
     {
         Person *p = &people[i];
@@ -2468,6 +2728,26 @@ static void updateThreats(void)
 
 static bool eatPerson(AttackBox attack)
 {
+    if (torchGuy.active)
+    {
+        const s16 eatX = torchGuy.x + PERSON_EAT_X;
+        const s16 eatY = torchGuy.y + PERSON_EAT_Y;
+        const s16 biteX = player.x + (player.dir > 0 ? PLAYER_BITE_X : PLAYER_W - PLAYER_BITE_X - PLAYER_BITE_W);
+        const s16 biteY = player.y + PLAYER_BITE_Y;
+
+        if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, eatX, eatY, PERSON_EAT_W, PERSON_EAT_H) ||
+            rectsOverlap(biteX, biteY, PLAYER_BITE_W, PLAYER_BITE_H, eatX, eatY, PERSON_EAT_W, PERSON_EAT_H))
+        {
+            spawnExplosion(torchGuy.x, torchGuy.y);
+            torchGuy.active = FALSE;
+            torchGuy.igniting = FALSE;
+            if (playerHealth < PLAYER_MAX_HEALTH) playerHealth++;
+            score += 75;
+            playTone(150, 10);
+            return TRUE;
+        }
+    }
+
     for (u8 i = 0; i < MAX_PEOPLE; i++)
     {
         Person *p = &people[i];
@@ -2586,6 +2866,26 @@ static void applyBuildingDamage(Building *b, u8 hitX, u8 hitY)
 
 static bool damageBuildingAtAttack(AttackBox attack)
 {
+    if (currentCity == CITY_GAVLE)
+    {
+        Building *goat = &buildings[GAVLE_GOAT_INDEX];
+        if (goat->alive && !goat->cracking && !goat->collapsing)
+        {
+            s16 goatLeft;
+            s16 goatRight;
+            s16 goatTop;
+            gavleGoatClimbBounds(goat, &goatLeft, &goatRight, &goatTop);
+            if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, goatLeft, goatTop, goatRight - goatLeft, (FLOOR_Y * 8) - goatTop))
+            {
+                const s16 rawY = (attack.y + (attack.h / 2)) / 8;
+                const u8 hitY = rawY < goat->y ? goat->y : (rawY >= FLOOR_Y ? FLOOR_Y - 1 : rawY);
+                const u8 hitX = attack.xDir > 0 ? goat->x + 4 : goat->x + 11;
+                applyBuildingDamage(goat, hitX, hitY);
+                return TRUE;
+            }
+        }
+    }
+
     for (u8 i = 0; i < MAX_BUILDINGS; i++)
     {
         Building *b = &buildings[i];
@@ -2642,7 +2942,7 @@ static void damageBuildings(ClimbContact contact, AttackBox attack)
         const s16 rawY = (attack.y + (attack.h / 2)) / 8;
         const u8 baseY = buildingBaseY(b);
         const u8 hitY = rawY < b->y ? b->y : (rawY >= baseY ? baseY - 1 : rawY);
-        const u8 hitX = contact.attackDir > 0 ? b->x : (b->x + b->w - 1);
+        const u8 hitX = isGavleGoatBuilding(b) ? (contact.attackDir > 0 ? b->x + 4 : b->x + 11) : (contact.attackDir > 0 ? b->x : (b->x + b->w - 1));
         applyBuildingDamage(b, hitX, hitY);
     }
 }
@@ -2757,6 +3057,7 @@ static ClimbContact getClimbContact(void)
     const s16 feet = player.y + PLAYER_H;
     const bool onCathedralRoof = isOnStandingCathedralRoof();
     const bool inCathedralFront = isInsideStandingCathedralFront();
+    const bool inGavleGoatFront = isInsideStandingGavleGoatFront();
     contact.active = FALSE;
     contact.snapX = player.x;
     contact.attackDir = player.dir;
@@ -2806,6 +3107,7 @@ static ClimbContact getClimbContact(void)
         if (b->collapsing) continue;
         if (inCathedralFront && !isCathedralBodyBuilding(b) && !isCathedralTowerBuilding(b)) continue;
         if (onCathedralRoof && !isCathedralBodyBuilding(b) && !isCathedralTowerBuilding(b)) continue;
+        if (inGavleGoatFront && !isGavleGoatBuilding(b)) continue;
         if (isOccludedByStandingCathedral(b)) continue;
 
         if (isMushroomBuilding(b))
@@ -2814,11 +3116,15 @@ static ClimbContact getClimbContact(void)
             bRight = (b->x + 4) * 8;
             bTop = (b->y + 5) * 8;
         }
+        if (isGavleGoatBuilding(b))
+        {
+            gavleGoatClimbBounds(b, &bLeft, &bRight, &bTop);
+        }
         if (feet < bTop - 6 || top > bBottom) continue;
 
         if (right >= bLeft - 6 && right <= bLeft + 10)
         {
-            if (isClimbContactHiddenByLaterBuilding(i, bLeft, top, feet)) continue;
+            if (!isGavleGoatBuilding(b) && isClimbContactHiddenByLaterBuilding(i, bLeft, top, feet)) continue;
             if (isBehindStandingCityHall(b, bLeft)) continue;
             if (isBehindStandingCathedral(b, bLeft)) continue;
             contact.active = TRUE;
@@ -2830,7 +3136,7 @@ static ClimbContact getClimbContact(void)
 
         if (left <= bRight + 6 && left >= bRight - 10)
         {
-            if (isClimbContactHiddenByLaterBuilding(i, bRight, top, feet)) continue;
+            if (!isGavleGoatBuilding(b) && isClimbContactHiddenByLaterBuilding(i, bRight, top, feet)) continue;
             if (isBehindStandingCityHall(b, bRight)) continue;
             if (isBehindStandingCathedral(b, bRight)) continue;
             contact.active = TRUE;
@@ -2940,7 +3246,7 @@ static void updatePlayer(u16 joy, u16 pressed)
             player.y = climbTopY;
             player.vy = 0;
             climbing = FALSE;
-            if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b) || isFridnasBuilding(b) || isCityHallTowerBuilding(b) || isCathedralTowerBuilding(b))
+            if (isOldWaterTowerBuilding(b) || isMushroomBuilding(b) || isFridnasBuilding(b) || isCityHallTowerBuilding(b) || isCathedralTowerBuilding(b) || isGavleGoatBuilding(b))
             {
                 player.x = climbContact.snapX;
                 player.grounded = FALSE;
