@@ -121,6 +121,10 @@
 #define TILE_AIRCON      (TILE_USER_INDEX + 46)
 #define TILE_SIGN        (TILE_USER_INDEX + 47)
 #define TILE_PIPE        (TILE_USER_INDEX + 48)
+#define TILE_WINDOW_PERSON_A (TILE_USER_INDEX + 49)
+#define TILE_WINDOW_PERSON_B (TILE_USER_INDEX + 50)
+#define TILE_WINDOW_PANIC_A  (TILE_USER_INDEX + 51)
+#define TILE_WINDOW_PANIC_B  (TILE_USER_INDEX + 52)
 
 typedef enum
 {
@@ -507,6 +511,10 @@ static void loadTiles(void)
     VDP_loadTileData(tileAircon, TILE_AIRCON, 1, DMA);
     VDP_loadTileData(tileSign, TILE_SIGN, 1, DMA);
     VDP_loadTileData(tilePipe, TILE_PIPE, 1, DMA);
+    VDP_loadTileData(tileWindowPersonA, TILE_WINDOW_PERSON_A, 1, DMA);
+    VDP_loadTileData(tileWindowPersonB, TILE_WINDOW_PERSON_B, 1, DMA);
+    VDP_loadTileData(tileWindowPanicA, TILE_WINDOW_PANIC_A, 1, DMA);
+    VDP_loadTileData(tileWindowPanicB, TILE_WINDOW_PANIC_B, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -744,6 +752,21 @@ static void drawBuildingChunks(const Building *b, u8 visibleH, u8 drawY)
         drawBuildingDamageMark(b, d, visibleH, drawY);
 }
 
+static u8 windowPersonTile(const Building *b, u8 p)
+{
+    const bool wave = (((frame >> 4) + p + b->x) & 1) != 0;
+    if (b->personEdible[p]) return wave ? TILE_WINDOW_PERSON_B : TILE_WINDOW_PERSON_A;
+    return wave ? TILE_WINDOW_PANIC_B : TILE_WINDOW_PANIC_A;
+}
+
+static void clearWindowPersonTile(const Building *b, u8 p)
+{
+    const u8 x = b->personX[p];
+    const u8 y = b->personY[p];
+    if (y >= HUD_TILES_H && y < FLOOR_Y && x < SCREEN_TILES_W)
+        VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WIN_BROKEN), x, y);
+}
+
 static u8 buildingStyle(const Building *b)
 {
     return ((b->x / 2) + b->w + b->h) & 3;
@@ -758,11 +781,6 @@ static u8 buildingBodyTile(const Building *b)
         case 2: return TILE_FACADE_GLASS;
         default: return TILE_YELLOW;
     }
-}
-
-static u8 buildingShadeTile(const Building *b)
-{
-    return buildingStyle(b) == 2 ? TILE_FACADE_DARK : TILE_FACADE_CONCRETE_DARK;
 }
 
 static u8 buildingAccentTile(const Building *b)
@@ -797,19 +815,13 @@ static void drawBuilding(const Building *b)
     }
 
     const u8 bodyTile = buildingBodyTile(b);
-    const u8 shadeTile = buildingShadeTile(b);
     const u8 accentTile = buildingAccentTile(b);
     const u8 roofTile = buildingStyle(b) == 2 ? TILE_ROOF_DARK : TILE_ROOF;
 
     VDP_fillTileMapRect(BG_B, attr(PAL0, bodyTile), b->x, drawY, b->w, visibleH);
     VDP_fillTileMapRect(BG_B, attr(PAL0, roofTile), b->x, drawY, b->w, 1);
     if (!b->collapsing) VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROOF_CAP), b->x, drawY, b->w, 1);
-    VDP_fillTileMapRect(BG_B, attr(PAL0, shadeTile), b->x, drawY, 1, visibleH);
     if (!b->collapsing && visibleH > 2) VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_RED), b->x + 1, drawY + visibleH - 2, b->w - 2, 1);
-    if (b->w > 4 && visibleH > 2)
-    {
-        VDP_fillTileMapRect(BG_B, attr(PAL0, accentTile), b->x + b->w - 1, drawY + 1, 1, visibleH - 2);
-    }
     for (u8 yy = 3; yy + 1 < visibleH; yy += 3)
     {
         VDP_fillTileMapRect(BG_B, attr(PAL0, accentTile), b->x + 1, drawY + yy, b->w - 1, 1);
@@ -844,7 +856,7 @@ static void drawBuilding(const Building *b)
     {
         if (!b->personAlive[p]) continue;
         if (b->personY[p] < drawY || b->personY[p] >= drawY + visibleH) continue;
-        VDP_setTileMapXY(BG_B, attr(PAL0, b->personEdible[p] ? TILE_GREEN : TILE_WHITE), b->personX[p], b->personY[p]);
+        VDP_setTileMapXY(BG_B, attr(PAL0, windowPersonTile(b, p)), b->personX[p], b->personY[p]);
     }
 }
 
@@ -853,6 +865,21 @@ static void drawBuildings(void)
     drawSkyline();
     for (u8 i = 0; i < MAX_BUILDINGS; i++) drawBuilding(&buildings[i]);
     drawRoad();
+}
+
+static void updateWindowPeopleTiles(void)
+{
+    for (u8 i = 0; i < MAX_BUILDINGS; i++)
+    {
+        const Building *b = &buildings[i];
+        if (!b->alive || b->collapsing) continue;
+
+        for (u8 p = 0; p < MAX_WINDOW_PEOPLE; p++)
+        {
+            if (!b->personAlive[p]) continue;
+            VDP_setTileMapXY(BG_B, attr(PAL0, windowPersonTile(b, p)), b->personX[p], b->personY[p]);
+        }
+    }
 }
 
 static void drawHud(void)
@@ -1289,6 +1316,7 @@ static void releaseWindowPeopleNear(Building *b, u8 hitX, u8 hitY)
         if (dx < -1 || dx > 1 || dy < -1 || dy > 1) continue;
 
         b->personAlive[p] = FALSE;
+        clearWindowPersonTile(b, p);
         spawnPerson((s16)b->personX[p] * 8, (s16)b->personY[p] * 8, TRUE, b->personEdible[p]);
     }
 }
@@ -1301,6 +1329,7 @@ static void releaseWindowPeopleAbove(Building *b, u8 tileY)
         if (b->personY[p] >= tileY) continue;
 
         b->personAlive[p] = FALSE;
+        clearWindowPersonTile(b, p);
         spawnPerson((s16)b->personX[p] * 8, (s16)b->personY[p] * 8, TRUE, b->personEdible[p]);
     }
 }
@@ -2201,6 +2230,7 @@ static void handleState(u16 joy)
             updateThreats();
             if (((frame & 7) == 0) && hasActiveHelicopter()) playRotorTone();
             updateBuildingCollapse();
+            if ((frame & 15) == 0) updateWindowPeopleTiles();
             if (state == STATE_GAME_OVER)
             {
                 resetSpriteEngineState();
