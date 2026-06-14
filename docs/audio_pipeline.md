@@ -100,9 +100,11 @@ headlessly through the same backend.
 
 `gui` starts the first Rust-side lab UI under the title `Vand-AI-lism`. It is
 currently a dependency-light terminal UI with commands to select an audio file,
-analyse and export it, play the original through PipeWire, audition extracted
-DAC chunks, and build/render the SGDK audio test ROM. This keeps the same
-headless backend while leaving room for a richer graphical front-end later.
+choose the output directory, analyse and export it, play the original through
+PipeWire, audition extracted DAC chunks, and build/render the SGDK audio test
+ROM. Use `out path/to/dir` to set the session output directory, or `a path/to/dir`
+to analyse once into a specific directory. This keeps the same headless backend
+while leaving room for a richer graphical front-end later.
 
 `analyse-audio` is the first Rust-native import/transcription pass. It accepts
 direct 16-bit PCM WAV and can import MP3/OGG/FLAC/other ffmpeg-supported audio

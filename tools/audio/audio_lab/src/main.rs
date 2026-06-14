@@ -720,12 +720,15 @@ fn analyse_samples(wav: &WavData) -> Vec<AnalysisFrame> {
 }
 
 fn default_analysis_path(input: &Path) -> PathBuf {
+    analysis_path_in_dir(input, Path::new("audio/converted"))
+}
+
+fn analysis_path_in_dir(input: &Path, output_dir: &Path) -> PathBuf {
     let stem = input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("audio");
-    PathBuf::from("audio")
-        .join("converted")
+    output_dir
         .join(format!("{stem}.vand-audio"))
         .join("arrangement.vand-audio.json")
 }
@@ -1386,7 +1389,7 @@ fn prompt_line(prompt: &str) -> io::Result<String> {
     Ok(line.trim().to_string())
 }
 
-fn print_gui_help(selected: Option<&Path>, last: Option<&AnalysisSummary>) {
+fn print_gui_help(selected: Option<&Path>, output_dir: &Path, last: Option<&AnalysisSummary>) {
     println!();
     println!("============================================================");
     println!("  Vand-AI-lism");
@@ -1398,6 +1401,7 @@ fn print_gui_help(selected: Option<&Path>, last: Option<&AnalysisSummary>) {
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "(none)".to_string())
     );
+    println!("output: {}", output_dir.display());
     if let Some(summary) = last {
         println!(
             "last: {} frames, {} active, {} runtime events, {} DAC chunks",
@@ -1408,7 +1412,9 @@ fn print_gui_help(selected: Option<&Path>, last: Option<&AnalysisSummary>) {
     println!();
     println!("commands:");
     println!("  o <audio> open MP3/OGG/FLAC/WAV");
+    println!("  out <dir> choose output directory for bundles");
     println!("  a        analyse/export current source");
+    println!("  a <dir>  analyse once to a specific output directory");
     println!("  p        play original source with PipeWire");
     println!("  d        play DAC chunk audition WAV");
     println!("  t        build and render SGDK audio test ROM");
@@ -1419,8 +1425,9 @@ fn print_gui_help(selected: Option<&Path>, last: Option<&AnalysisSummary>) {
 
 fn launch_gui() -> io::Result<()> {
     let mut selected: Option<PathBuf> = None;
+    let mut output_dir = PathBuf::from("audio/converted");
     let mut last_summary: Option<AnalysisSummary> = None;
-    print_gui_help(selected.as_deref(), last_summary.as_ref());
+    print_gui_help(selected.as_deref(), &output_dir, last_summary.as_ref());
 
     loop {
         let input = prompt_line("Vand-AI-lism> ")?;
@@ -1438,15 +1445,36 @@ fn launch_gui() -> io::Result<()> {
                 }
                 selected = Some(PathBuf::from(path_text));
                 last_summary = None;
-                print_gui_help(selected.as_deref(), last_summary.as_ref());
+                print_gui_help(selected.as_deref(), &output_dir, last_summary.as_ref());
+            }
+            "out" | "output" => {
+                let path_text = parts.collect::<Vec<_>>().join(" ");
+                if path_text.is_empty() {
+                    println!("output needs a directory path");
+                    continue;
+                }
+                output_dir = PathBuf::from(path_text);
+                last_summary = None;
+                print_gui_help(selected.as_deref(), &output_dir, last_summary.as_ref());
             }
             "a" | "analyse" | "analyze" => {
                 let Some(path) = selected.as_deref() else {
                     println!("choose audio first with: o path/to/file.ogg");
                     continue;
                 };
-                println!("analysing {} ...", path.display());
-                match analyse_input(path, None, false) {
+                let override_dir = parts.collect::<Vec<_>>().join(" ");
+                let active_output_dir = if override_dir.is_empty() {
+                    output_dir.clone()
+                } else {
+                    PathBuf::from(override_dir)
+                };
+                let out = analysis_path_in_dir(path, &active_output_dir);
+                println!(
+                    "analysing {} -> {} ...",
+                    path.display(),
+                    active_output_dir.display()
+                );
+                match analyse_input(path, Some(out), false) {
                     Ok(summary) => {
                         println!(
                             "wrote {}, {}, and {}",
@@ -1493,7 +1521,7 @@ fn launch_gui() -> io::Result<()> {
                     println!("test ROM failed: {err}");
                 }
             }
-            "h" | "help" => print_gui_help(selected.as_deref(), last_summary.as_ref()),
+            "h" | "help" => print_gui_help(selected.as_deref(), &output_dir, last_summary.as_ref()),
             "q" | "quit" | "exit" => break,
             _ => println!("unknown command: {command}"),
         }
