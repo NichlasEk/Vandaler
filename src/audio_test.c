@@ -66,9 +66,9 @@ int AudioTest_main(void)
     PSG_reset();
     VandAudio_init();
 #ifdef VAND_AUDIO_GENERATED
-    VandAudio_setDacBank(generatedAudioDacSamples, generatedAudioDacLengths, generatedAudioDacCount);
+    VandAudio_setDacBank(generatedAudioDacSamples, generatedAudioDacLengths, generatedAudioDacRates, generatedAudioDacCount);
 #else
-    VandAudio_setDacBank(NULL, NULL, 0);
+    VandAudio_setDacBank(NULL, NULL, NULL, 0);
 #endif
     drawAudioTest();
 

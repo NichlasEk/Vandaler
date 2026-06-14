@@ -9,6 +9,7 @@ const DEFAULT_SECONDS: u32 = 5;
 const DEFAULT_RATE: u32 = 44_100;
 const ANALYSIS_FRAME: usize = 1024;
 const ANALYSIS_HOP: usize = 512;
+const DAC_SAMPLE_RATE: u32 = 8_000;
 
 struct Args {
     command: CommandMode,
@@ -363,7 +364,9 @@ struct DacChunk {
     start_frame: usize,
     end_frame: usize,
     start_sample: usize,
+    source_sample_count: usize,
     sample_count: usize,
+    sample_rate: u32,
     peak: f32,
     rms: f32,
     path: String,
@@ -769,7 +772,7 @@ fn write_runtime_binary(path: &Path, sample_rate: u32, events: &[RuntimeEvent]) 
 
     let mut file = File::create(path)?;
     file.write_all(b"VADB")?;
-    file.write_all(&2u16.to_le_bytes())?;
+    file.write_all(&3u16.to_le_bytes())?;
     file.write_all(&(events.len() as u16).to_le_bytes())?;
     file.write_all(&(ANALYSIS_HOP as u16).to_le_bytes())?;
     file.write_all(&sample_rate.to_le_bytes())?;
@@ -808,6 +811,7 @@ fn write_sgdk_audio(
         "extern const u16 generatedAudioEventCount;\n\n",
         "extern const u8 * const generatedAudioDacSamples[];\n",
         "extern const u16 generatedAudioDacLengths[];\n",
+        "extern const u16 generatedAudioDacRates[];\n",
         "extern const u16 generatedAudioDacCount;\n\n",
         "#endif\n"
     );
@@ -848,6 +852,15 @@ fn write_sgdk_audio(
     } else {
         for chunk in chunks {
             c.push_str(&format!("    {},\n", chunk.samples.len()));
+        }
+    }
+    c.push_str("};\n\n");
+    c.push_str("const u16 generatedAudioDacRates[] =\n{\n");
+    if chunks.is_empty() {
+        c.push_str("    0,\n");
+    } else {
+        for chunk in chunks {
+            c.push_str(&format!("    {},\n", chunk.sample_rate));
         }
     }
     c.push_str("};\n\n");
@@ -943,6 +956,37 @@ fn is_dac_candidate(frame: &AnalysisFrame) -> bool {
         || (frame.noise_amp > 0.42 && frame.rms > 0.060)
 }
 
+fn resample_dac_chunk(slice: &[f32], source_rate: u32, target_rate: u32, peak: f32) -> Vec<u8> {
+    if slice.is_empty() || source_rate == 0 || target_rate == 0 {
+        return Vec::new();
+    }
+
+    let out_len = ((slice.len() as u64 * target_rate as u64 + (source_rate / 2) as u64)
+        / source_rate as u64)
+        .max(1) as usize;
+    let fade_len = (target_rate as usize / 250).clamp(4, 48).min(out_len / 2);
+    let mut out = Vec::with_capacity(out_len);
+
+    for i in 0..out_len {
+        let src_pos = i as f32 * source_rate as f32 / target_rate as f32;
+        let src_idx = src_pos.floor() as usize;
+        let frac = src_pos - src_idx as f32;
+        let a = slice[src_idx.min(slice.len() - 1)];
+        let b = slice[(src_idx + 1).min(slice.len() - 1)];
+        let mut normalized = ((a * (1.0 - frac) + b * frac) / peak * 0.88).clamp(-1.0, 1.0);
+
+        if fade_len > 0 {
+            let fade_in = (i + 1).min(fade_len) as f32 / fade_len as f32;
+            let fade_out = (out_len - i).min(fade_len) as f32 / fade_len as f32;
+            normalized *= fade_in.min(fade_out).min(1.0);
+        }
+
+        out.push((normalized * 127.0 + 128.0).round().clamp(0.0, 255.0) as u8);
+    }
+
+    out
+}
+
 fn extract_dac_chunks(
     bundle_dir: &Path,
     wav: &WavData,
@@ -983,20 +1027,16 @@ fn extract_dac_chunks(
                 .sqrt();
             let file_name = format!("chunk_{:02}.u8", chunks.len());
             let path = chunk_dir.join(&file_name);
-            let pcm = slice
-                .iter()
-                .map(|sample| {
-                    let normalized = (*sample / peak * 0.88).clamp(-1.0, 1.0);
-                    (normalized * 127.0 + 128.0).round().clamp(0.0, 255.0) as u8
-                })
-                .collect::<Vec<_>>();
+            let pcm = resample_dac_chunk(slice, wav.sample_rate, DAC_SAMPLE_RATE, peak);
             std::fs::write(&path, &pcm)?;
             chunks.push(DacChunk {
                 id: chunks.len(),
                 start_frame,
                 end_frame,
                 start_sample,
-                sample_count: slice.len(),
+                source_sample_count: slice.len(),
+                sample_count: pcm.len(),
+                sample_rate: DAC_SAMPLE_RATE,
                 peak,
                 rms,
                 path: format!("dac_chunks/{file_name}"),
@@ -1028,6 +1068,10 @@ fn write_dac_chunks_json(
         json_escape(&input.display().to_string())
     ));
     out.push_str(&format!("  \"sample_rate\": {},\n", sample_rate));
+    out.push_str(&format!(
+        "  \"playback_sample_rate\": {},\n",
+        DAC_SAMPLE_RATE
+    ));
     out.push_str("  \"encoding\": \"unsigned_u8_pcm_center_128\",\n");
     out.push_str("  \"chunks\": [\n");
     for (i, chunk) in chunks.iter().enumerate() {
@@ -1035,7 +1079,8 @@ fn write_dac_chunks_json(
         out.push_str(&format!(
             concat!(
                 "    {{\"id\": {}, \"path\": \"{}\", \"start_frame\": {}, ",
-                "\"end_frame\": {}, \"start_sample\": {}, \"sample_count\": {}, ",
+                "\"end_frame\": {}, \"source_start_sample\": {}, ",
+                "\"source_sample_count\": {}, \"sample_rate\": {}, \"sample_count\": {}, ",
                 "\"peak\": {:.6}, \"rms\": {:.6}}}{}\n"
             ),
             chunk.id,
@@ -1043,6 +1088,8 @@ fn write_dac_chunks_json(
             chunk.start_frame,
             chunk.end_frame,
             chunk.start_sample,
+            chunk.source_sample_count,
+            chunk.sample_rate,
             chunk.sample_count,
             chunk.peak,
             chunk.rms,

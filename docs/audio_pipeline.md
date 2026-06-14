@@ -73,7 +73,7 @@ Next milestones:
 3. Add `.ym` export for debug and comparison.
 4. Add a tiny audio test ROM around the SGDK runtime player.
 5. Add optional heavy stem separation when a local model is available.
-6. Move DAC playback from the current coarse frame pump to a proper timed mixer.
+6. Move DAC playback from the current 60 Hz scheduler to tighter interrupt/Z80 timing.
 
 `debug.vgm` is intentionally a listening/debug artifact. It writes YM2612
 registers for two channels from the bass and lead tracks so the transcription can
@@ -108,11 +108,13 @@ The Rust exporter also writes split intent tracks:
 - `dac_chunks.json`
 - `dac_chunks/chunk_XX.u8`
 
-The DAC chunks are unsigned 8-bit PCM centered at 128. Generated SGDK tables
-also export those chunks as C arrays, and `VandAudioEvent` rows can trigger a
-chunk by id. The first runtime path pumps a fixed number of YM2612 DAC bytes per
-game tick, so it is useful for crunchy transient proof-of-life but is not yet a
-proper sample-rate-accurate DAC mixer.
+The DAC chunks are unsigned 8-bit PCM centered at 128. The Rust exporter
+resamples candidates to 8 kHz, applies a short fade to reduce clicks, writes
+source/playback metadata to `dac_chunks.json`, and exports C arrays plus
+`generatedAudioDacRates[]`. `VandAudioEvent` rows can trigger a chunk by id.
+The runtime scheduler now derives bytes per game tick from the chunk playback
+rate with an accumulator instead of using a fixed byte count, but it is still
+called once per 60 Hz game update rather than from a tighter audio interrupt.
 
 Pass `--install-sgdk` to copy that generated table to ignored
 `out/generated_audio.c/.h`. `make audio-test-generated` then copies those files

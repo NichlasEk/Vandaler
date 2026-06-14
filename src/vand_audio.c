@@ -4,15 +4,19 @@
 #define VAND_AUDIO_FM_LEAD_CH 1
 #define VAND_AUDIO_FM_KEY_ALL 0xF0
 #define VAND_AUDIO_DAC_NONE 255
-#define VAND_AUDIO_DAC_BYTES_PER_TICK 128
+#define VAND_AUDIO_DAC_DEFAULT_RATE 8000
+#define VAND_AUDIO_TICKS_PER_SECOND 60
 
 static bool audioReady = FALSE;
 static const u8 * const *dacSamples = NULL;
 static const u16 *dacLengths = NULL;
+static const u16 *dacRates = NULL;
 static u16 dacCount = 0;
 static const u8 *dacActive = NULL;
 static u16 dacLength = 0;
 static u16 dacPos = 0;
+static u16 dacRate = 0;
+static u16 dacRateRemainder = 0;
 static u8 dacLevel = 0;
 
 static void ymKey(u8 channel, bool on)
@@ -78,6 +82,8 @@ static void dacStop(void)
     dacActive = NULL;
     dacLength = 0;
     dacPos = 0;
+    dacRate = 0;
+    dacRateRemainder = 0;
     dacLevel = 0;
     YM2612_writeReg(0, 0x2A, 0x80);
 }
@@ -89,17 +95,24 @@ static void dacStart(u8 chunk, u8 level)
     dacActive = dacSamples[chunk];
     dacLength = dacLengths[chunk];
     dacPos = 0;
+    dacRate = ((dacRates != NULL) && (dacRates[chunk] > 0)) ? dacRates[chunk] : VAND_AUDIO_DAC_DEFAULT_RATE;
+    dacRateRemainder = 0;
     dacLevel = level > 15 ? 15 : level;
     if ((dacActive == NULL) || (dacLength == 0)) dacStop();
 }
 
 static void dacPump(void)
 {
+    u16 samplesThisTick;
     u16 i;
 
     if (dacActive == NULL) return;
 
-    for (i = 0; i < VAND_AUDIO_DAC_BYTES_PER_TICK; i++)
+    dacRateRemainder += dacRate;
+    samplesThisTick = dacRateRemainder / VAND_AUDIO_TICKS_PER_SECOND;
+    dacRateRemainder %= VAND_AUDIO_TICKS_PER_SECOND;
+
+    for (i = 0; i < samplesThisTick; i++)
     {
         const s16 centered = (s16)dacActive[dacPos++] - 128;
         const u8 sample = (u8)(128 + ((centered * dacLevel) / 15));
@@ -146,10 +159,11 @@ void VandAudio_init(void)
     audioReady = TRUE;
 }
 
-void VandAudio_setDacBank(const u8 * const *samples, const u16 *lengths, u16 count)
+void VandAudio_setDacBank(const u8 * const *samples, const u16 *lengths, const u16 *rates, u16 count)
 {
     dacSamples = samples;
     dacLengths = lengths;
+    dacRates = rates;
     dacCount = count;
     dacStop();
 }

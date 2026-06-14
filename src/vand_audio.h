@@ -40,7 +40,7 @@ typedef struct
 } VandAudioPlayer;
 
 void VandAudio_init(void);
-void VandAudio_setDacBank(const u8 * const *samples, const u16 *lengths, u16 count);
+void VandAudio_setDacBank(const u8 * const *samples, const u16 *lengths, const u16 *rates, u16 count);
 void VandAudio_start(VandAudioPlayer *player, const VandAudioEvent *events, u16 eventCount, bool loop);
 void VandAudio_stop(VandAudioPlayer *player);
 void VandAudio_update(VandAudioPlayer *player);
