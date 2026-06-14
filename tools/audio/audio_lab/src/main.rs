@@ -28,11 +28,12 @@ enum CommandMode {
     RenderRom,
     TestRom,
     AnalyseWav,
+    Gui,
 }
 
 fn usage() {
     eprintln!(
-        "usage:\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
+        "usage:\n  vandaler-audio-lab gui\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
     );
 }
 
@@ -52,6 +53,7 @@ fn parse_args() -> io::Result<Args> {
         match arg.as_str() {
             "render-rom" if command.is_none() => command = Some(CommandMode::RenderRom),
             "analyse-wav" if command.is_none() => command = Some(CommandMode::AnalyseWav),
+            "gui" if command.is_none() => command = Some(CommandMode::Gui),
             "test-rom" if command.is_none() => {
                 command = Some(CommandMode::TestRom);
                 wav = PathBuf::from("out/audio-test.wav");
@@ -371,6 +373,16 @@ struct DacChunk {
     rms: f32,
     path: String,
     samples: Vec<u8>,
+}
+
+struct AnalysisSummary {
+    frames: usize,
+    active_frames: usize,
+    runtime_events: usize,
+    dac_chunks: usize,
+    arrangement: PathBuf,
+    bundle_dir: PathBuf,
+    dac_preview: PathBuf,
 }
 
 fn read_u16_le(bytes: &[u8]) -> u16 {
@@ -1101,6 +1113,29 @@ fn write_dac_chunks_json(
     std::fs::write(path, out)
 }
 
+fn write_dac_preview_wav(bundle_dir: &Path, chunks: &[DacChunk]) -> io::Result<PathBuf> {
+    let path = bundle_dir.join("dac_preview.wav");
+    let mut stereo = Vec::new();
+    let gap_samples = (DAC_SAMPLE_RATE / 12) as usize;
+
+    for chunk in chunks {
+        for sample in &chunk.samples {
+            let centered = i16::from(*sample) - 128;
+            let value = centered.saturating_mul(256);
+            stereo.push(value);
+            stereo.push(value);
+        }
+        stereo.extend(std::iter::repeat_n(0, gap_samples * 2));
+    }
+
+    if stereo.is_empty() {
+        stereo.extend(std::iter::repeat_n(0, (DAC_SAMPLE_RATE / 4) as usize * 2));
+    }
+
+    write_wav_i16_stereo(&path, DAC_SAMPLE_RATE, &stereo)?;
+    Ok(path)
+}
+
 fn write_analysis_json(
     path: &Path,
     input: &Path,
@@ -1155,22 +1190,20 @@ fn write_analysis_json(
     std::fs::write(path, out)
 }
 
-fn analyse_wav(args: &Args) -> io::Result<()> {
-    let input = args
-        .rom
-        .as_deref()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing WAV path"))?;
+fn analyse_input(
+    input: &Path,
+    out: Option<PathBuf>,
+    install_sgdk: bool,
+) -> io::Result<AnalysisSummary> {
     let wav = read_wav_mono(input)?;
     let frames = analyse_samples(&wav);
-    let out = args
-        .out
-        .clone()
-        .unwrap_or_else(|| default_analysis_path(input));
-    let bundle_dir = out.parent().unwrap_or_else(|| Path::new("."));
-    let dac_chunks = extract_dac_chunks(bundle_dir, &wav, &frames)?;
+    let out = out.unwrap_or_else(|| default_analysis_path(input));
+    let bundle_dir = out.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let dac_chunks = extract_dac_chunks(&bundle_dir, &wav, &frames)?;
     let runtime_events = build_runtime_events(&frames, wav.sample_rate, &dac_chunks);
+    let dac_preview = write_dac_preview_wav(&bundle_dir, &dac_chunks)?;
     write_analysis_json(&out, input, &wav, &frames)?;
-    write_split_tracks(bundle_dir, input, &frames)?;
+    write_split_tracks(&bundle_dir, input, &frames)?;
     write_dac_chunks_json(
         &bundle_dir.join("dac_chunks.json"),
         input,
@@ -1188,7 +1221,7 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
         &runtime_events,
         &dac_chunks,
     )?;
-    if args.install_sgdk {
+    if install_sgdk {
         write_sgdk_audio(
             Path::new("out/generated_audio.h"),
             Path::new("out/generated_audio.c"),
@@ -1200,15 +1233,163 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
         .iter()
         .filter(|frame| frame.class_name != "silence")
         .count();
+    Ok(AnalysisSummary {
+        frames: frames.len(),
+        active_frames: active,
+        runtime_events: runtime_events.len(),
+        dac_chunks: dac_chunks.len(),
+        arrangement: out,
+        bundle_dir,
+        dac_preview,
+    })
+}
+
+fn analyse_wav(args: &Args) -> io::Result<()> {
+    let input = args
+        .rom
+        .as_deref()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing WAV path"))?;
+    let summary = analyse_input(input, args.out.clone(), args.install_sgdk)?;
     println!(
         "analysed {} | {} frames, {} active, {} runtime events, {} dac chunks | wrote {}",
         input.display(),
-        frames.len(),
-        active,
-        runtime_events.len(),
-        dac_chunks.len(),
-        out.display()
+        summary.frames,
+        summary.active_frames,
+        summary.runtime_events,
+        summary.dac_chunks,
+        summary.arrangement.display()
     );
+    Ok(())
+}
+
+fn play_audio(path: &Path) -> io::Result<()> {
+    let status = Command::new("pw-play").arg(path).status()?;
+    if !status.success() {
+        return Err(io::Error::other("pw-play failed"));
+    }
+    Ok(())
+}
+
+fn prompt_line(prompt: &str) -> io::Result<String> {
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    Ok(line.trim().to_string())
+}
+
+fn print_gui_help(selected: Option<&Path>, last: Option<&AnalysisSummary>) {
+    println!();
+    println!("============================================================");
+    println!("  Vand-AI-lism");
+    println!("  Mega Drive audio transcription lab");
+    println!("============================================================");
+    println!(
+        "source: {}",
+        selected
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "(none)".to_string())
+    );
+    if let Some(summary) = last {
+        println!(
+            "last: {} frames, {} active, {} runtime events, {} DAC chunks",
+            summary.frames, summary.active_frames, summary.runtime_events, summary.dac_chunks
+        );
+        println!("bundle: {}", summary.bundle_dir.display());
+    }
+    println!();
+    println!("commands:");
+    println!("  o <wav>  open 16-bit PCM WAV");
+    println!("  a        analyse/export current source");
+    println!("  p        play original source with PipeWire");
+    println!("  d        play DAC chunk audition WAV");
+    println!("  t        build and render SGDK audio test ROM");
+    println!("  h        show this help");
+    println!("  q        quit");
+    println!();
+}
+
+fn launch_gui() -> io::Result<()> {
+    let mut selected: Option<PathBuf> = None;
+    let mut last_summary: Option<AnalysisSummary> = None;
+    print_gui_help(selected.as_deref(), last_summary.as_ref());
+
+    loop {
+        let input = prompt_line("Vand-AI-lism> ")?;
+        let mut parts = input.split_whitespace();
+        let Some(command) = parts.next() else {
+            continue;
+        };
+
+        match command {
+            "o" | "open" => {
+                let path_text = parts.collect::<Vec<_>>().join(" ");
+                if path_text.is_empty() {
+                    println!("open needs a WAV path");
+                    continue;
+                }
+                selected = Some(PathBuf::from(path_text));
+                last_summary = None;
+                print_gui_help(selected.as_deref(), last_summary.as_ref());
+            }
+            "a" | "analyse" | "analyze" => {
+                let Some(path) = selected.as_deref() else {
+                    println!("choose a WAV first with: o path/to/file.wav");
+                    continue;
+                };
+                println!("analysing {} ...", path.display());
+                match analyse_input(path, None, false) {
+                    Ok(summary) => {
+                        println!(
+                            "wrote {} and {}",
+                            summary.arrangement.display(),
+                            summary.dac_preview.display()
+                        );
+                        last_summary = Some(summary);
+                    }
+                    Err(err) => println!("analysis failed: {err}"),
+                }
+            }
+            "p" | "play" => {
+                let Some(path) = selected.as_deref() else {
+                    println!("choose a WAV first with: o path/to/file.wav");
+                    continue;
+                };
+                if let Err(err) = play_audio(path) {
+                    println!("play failed: {err}");
+                }
+            }
+            "d" | "dac" => {
+                let Some(summary) = last_summary.as_ref() else {
+                    println!("run analysis first with: a");
+                    continue;
+                };
+                if let Err(err) = play_audio(&summary.dac_preview) {
+                    println!("DAC preview failed: {err}");
+                }
+            }
+            "t" | "test" => {
+                let args = Args {
+                    command: CommandMode::TestRom,
+                    rom: None,
+                    wav: PathBuf::from("out/audio-test.wav"),
+                    report: Some(PathBuf::from("out/audio-test-report.json")),
+                    out: None,
+                    seconds: DEFAULT_SECONDS,
+                    sample_rate: DEFAULT_RATE,
+                    play: true,
+                    install_sgdk: false,
+                };
+                if let Err(err) = test_rom(&args) {
+                    println!("test ROM failed: {err}");
+                }
+            }
+            "h" | "help" => print_gui_help(selected.as_deref(), last_summary.as_ref()),
+            "q" | "quit" | "exit" => break,
+            _ => println!("unknown command: {command}"),
+        }
+    }
+
     Ok(())
 }
 
@@ -1216,6 +1397,7 @@ fn run() -> io::Result<()> {
     let args = parse_args()?;
     match args.command {
         CommandMode::AnalyseWav => analyse_wav(&args),
+        CommandMode::Gui => launch_gui(),
         CommandMode::RenderRom => render_rom(&args),
         CommandMode::TestRom => test_rom(&args),
     }

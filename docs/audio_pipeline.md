@@ -24,7 +24,9 @@ python tools/audio/md_audio_lab.py --gui
 python tools/audio/md_audio_lab.py path/to/song.mp3 --play
 make audio-test
 make audio-lab
+make audio-gui
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- test-rom --seconds 5
+cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- gui
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- render-rom out/audio-test.bin --wav out/audio-test.wav --report out/audio-test-report.json --seconds 5
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-wav out/audio-test.wav --out out/audio-test-analysis.vand-audio.json
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-wav out/audio-test.wav --out audio/converted/audio-test.vand-audio/arrangement.vand-audio.json --install-sgdk
@@ -39,6 +41,7 @@ It writes a bundle:
 - `audio/converted/<name>.vand-audio/fm_lead.json`
 - `audio/converted/<name>.vand-audio/psg_noise.json`
 - `audio/converted/<name>.vand-audio/dac_chunks.json`
+- `audio/converted/<name>.vand-audio/dac_preview.wav`
 - `audio/converted/<name>.vand-audio/debug.vgm`
 - `audio/converted/<name>.vand-audio/events.vandbin`
 - `audio/converted/<name>.vand-audio/sgdk_audio.h`
@@ -93,6 +96,12 @@ i16 audio, writes a WAV and JSON report, and can hand it to PipeWire with
 `--play`. `test-rom` builds the SGDK audio test ROM first and then renders it
 headlessly through the same backend.
 
+`gui` starts the first Rust-side lab UI under the title `Vand-AI-lism`. It is
+currently a dependency-light terminal UI with commands to select a WAV, analyse
+and export it, play the original through PipeWire, audition extracted DAC chunks,
+and build/render the SGDK audio test ROM. This keeps the same headless backend
+while leaving room for a richer graphical front-end later.
+
 `analyse-wav` is the first Rust-native transcription pass. It currently accepts
 16-bit PCM WAV, mixes to mono, tracks bass/lead note candidates with a small
 Goertzel analyser, detects transient jumps and writes
@@ -107,14 +116,17 @@ The Rust exporter also writes split intent tracks:
 - `psg_noise.json`
 - `dac_chunks.json`
 - `dac_chunks/chunk_XX.u8`
+- `dac_preview.wav`
 
 The DAC chunks are unsigned 8-bit PCM centered at 128. The Rust exporter
 resamples candidates to 8 kHz, applies a short fade to reduce clicks, writes
 source/playback metadata to `dac_chunks.json`, and exports C arrays plus
-`generatedAudioDacRates[]`. `VandAudioEvent` rows can trigger a chunk by id.
-The runtime scheduler now derives bytes per game tick from the chunk playback
-rate with an accumulator instead of using a fixed byte count, but it is still
-called once per 60 Hz game update rather than from a tighter audio interrupt.
+`generatedAudioDacRates[]`. It also writes `dac_preview.wav` so the extracted
+sample candidates can be auditioned directly from the lab UI. `VandAudioEvent`
+rows can trigger a chunk by id. The runtime scheduler now derives bytes per game
+tick from the chunk playback rate with an accumulator instead of using a fixed
+byte count, but it is still called once per 60 Hz game update rather than from a
+tighter audio interrupt.
 
 Pass `--install-sgdk` to copy that generated table to ignored
 `out/generated_audio.c/.h`. `make audio-test-generated` then copies those files

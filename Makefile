@@ -6,7 +6,7 @@ ifneq ($(findstring -DVAND_AUDIO_GENERATED,$(EXTRA_FLAGS)),-DVAND_AUDIO_GENERATE
 $(shell rm -f src/generated_audio.c src/generated_audio.h)
 endif
 
-.PHONY: assets assets-preview audio-test audio-test-generated audio-lab audio-lab-headless audio-analyse-test audio-generated-loop
+.PHONY: assets assets-preview audio-test audio-test-generated audio-lab audio-lab-headless audio-gui audio-analyse-test audio-generated-loop
 
 assets:
 	tools/assets.sh build
@@ -30,6 +30,9 @@ audio-lab: audio-test
 
 audio-lab-headless:
 	cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- test-rom --seconds 5
+
+audio-gui:
+	cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- gui
 
 audio-analyse-test:
 	cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-wav out/audio-test.wav --out out/audio-test-analysis.vand-audio.json
