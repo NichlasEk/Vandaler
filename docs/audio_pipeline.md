@@ -22,6 +22,8 @@ Current prototype:
 ```sh
 python tools/audio/md_audio_lab.py --gui
 python tools/audio/md_audio_lab.py path/to/song.mp3 --play
+make audio-test
+cargo run --manifest-path tools/audio/oxide_probe/Cargo.toml -- out/audio-test.bin --wav out/audio-test.wav --seconds 5
 ```
 
 It writes a bundle:
@@ -77,3 +79,7 @@ FM/PSG/DAC intent rows.
 
 `src/vand_audio.c` is the first runtime side of this: it consumes the generated
 `VandAudioEvent` rows and writes YM2612 bass/lead plus PSG noise intent.
+
+`tools/audio/oxide_probe` uses the local `/home/nichlas/EutherOxide` Rust Mega
+Drive core as a host bridge. It loads a ROM, runs frames, renders stereo i16
+audio, writes a WAV, and can hand it to PipeWire with `--play`.

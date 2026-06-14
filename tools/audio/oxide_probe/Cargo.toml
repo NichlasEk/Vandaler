@@ -1,0 +1,7 @@
+[package]
+name = "vandaler-oxide-audio-probe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+euther_oxide = { path = "/home/nichlas/EutherOxide" }
