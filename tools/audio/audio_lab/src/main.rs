@@ -356,6 +356,17 @@ struct RuntimeEvent {
     kind: u8,
 }
 
+struct DacChunk {
+    id: usize,
+    start_frame: usize,
+    end_frame: usize,
+    start_sample: usize,
+    sample_count: usize,
+    peak: f32,
+    rms: f32,
+    path: String,
+}
+
 fn read_u16_le(bytes: &[u8]) -> u16 {
     u16::from_le_bytes([bytes[0], bytes[1]])
 }
@@ -797,6 +808,180 @@ fn write_sgdk_audio(header: &Path, source: &Path, events: &[RuntimeEvent]) -> io
     std::fs::write(source, c)
 }
 
+fn write_frame_track_json(
+    path: &Path,
+    input: &Path,
+    track_name: &str,
+    frames: &[AnalysisFrame],
+    value_for_frame: impl Fn(&AnalysisFrame) -> (f32, f32),
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut out = String::new();
+    out.push_str("{\n");
+    out.push_str("  \"format\": \"vandaler-vand-audio-track-rust-v0\",\n");
+    out.push_str(&format!("  \"track\": \"{}\",\n", track_name));
+    out.push_str(&format!(
+        "  \"source\": \"{}\",\n",
+        json_escape(&input.display().to_string())
+    ));
+    out.push_str(&format!("  \"hop\": {},\n", ANALYSIS_HOP));
+    out.push_str("  \"frames\": [\n");
+    for (i, frame) in frames.iter().enumerate() {
+        let comma = if i + 1 == frames.len() { "" } else { "," };
+        let (hz, amp) = value_for_frame(frame);
+        out.push_str(&format!(
+            "    {{\"index\": {}, \"t\": {:.6}, \"hz\": {:.3}, \"amp\": {:.5}}}{}\n",
+            frame.index, frame.time, hz, amp, comma
+        ));
+    }
+    out.push_str("  ]\n");
+    out.push_str("}\n");
+    std::fs::write(path, out)
+}
+
+fn write_split_tracks(bundle_dir: &Path, input: &Path, frames: &[AnalysisFrame]) -> io::Result<()> {
+    write_frame_track_json(
+        &bundle_dir.join("fm_bass.json"),
+        input,
+        "fm_bass",
+        frames,
+        |frame| (frame.bass_hz, frame.bass_amp),
+    )?;
+    write_frame_track_json(
+        &bundle_dir.join("fm_lead.json"),
+        input,
+        "fm_lead",
+        frames,
+        |frame| (frame.lead_hz, frame.lead_amp),
+    )?;
+    write_frame_track_json(
+        &bundle_dir.join("psg_noise.json"),
+        input,
+        "psg_noise",
+        frames,
+        |frame| (0.0, frame.noise_amp.max(frame.transient * 0.65)),
+    )
+}
+
+fn is_dac_candidate(frame: &AnalysisFrame) -> bool {
+    matches!(frame.class_name, "drum" | "sample")
+        || (frame.transient > 0.42 && frame.rms > 0.035)
+        || (frame.noise_amp > 0.42 && frame.rms > 0.060)
+}
+
+fn extract_dac_chunks(
+    bundle_dir: &Path,
+    wav: &WavData,
+    frames: &[AnalysisFrame],
+) -> io::Result<Vec<DacChunk>> {
+    let chunk_dir = bundle_dir.join("dac_chunks");
+    std::fs::create_dir_all(&chunk_dir)?;
+
+    let mut chunks = Vec::new();
+    let mut index = 0usize;
+    while index < frames.len() && chunks.len() < 32 {
+        if !is_dac_candidate(&frames[index]) {
+            index += 1;
+            continue;
+        }
+
+        let start_frame = index;
+        let mut end_frame = index;
+        while end_frame + 1 < frames.len() && is_dac_candidate(&frames[end_frame + 1]) {
+            end_frame += 1;
+        }
+
+        let start_sample = start_frame.saturating_mul(ANALYSIS_HOP);
+        let mut end_sample =
+            ((end_frame + 1) * ANALYSIS_HOP + ANALYSIS_FRAME).min(wav.samples.len());
+        let max_len = (wav.sample_rate as usize / 4).max(1);
+        end_sample = end_sample.min(start_sample.saturating_add(max_len));
+
+        if end_sample > start_sample + 32 {
+            let slice = &wav.samples[start_sample..end_sample];
+            let peak = slice
+                .iter()
+                .map(|sample| sample.abs())
+                .fold(0.0f32, f32::max)
+                .max(1e-6);
+            let rms = (slice.iter().map(|sample| sample * sample).sum::<f32>()
+                / slice.len() as f32)
+                .sqrt();
+            let file_name = format!("chunk_{:02}.u8", chunks.len());
+            let path = chunk_dir.join(&file_name);
+            let pcm = slice
+                .iter()
+                .map(|sample| {
+                    let normalized = (*sample / peak * 0.88).clamp(-1.0, 1.0);
+                    (normalized * 127.0 + 128.0).round().clamp(0.0, 255.0) as u8
+                })
+                .collect::<Vec<_>>();
+            std::fs::write(&path, pcm)?;
+            chunks.push(DacChunk {
+                id: chunks.len(),
+                start_frame,
+                end_frame,
+                start_sample,
+                sample_count: slice.len(),
+                peak,
+                rms,
+                path: format!("dac_chunks/{file_name}"),
+            });
+        }
+
+        index = end_frame + 1;
+    }
+
+    Ok(chunks)
+}
+
+fn write_dac_chunks_json(
+    path: &Path,
+    input: &Path,
+    sample_rate: u32,
+    chunks: &[DacChunk],
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut out = String::new();
+    out.push_str("{\n");
+    out.push_str("  \"format\": \"vandaler-dac-chunks-rust-v0\",\n");
+    out.push_str(&format!(
+        "  \"source\": \"{}\",\n",
+        json_escape(&input.display().to_string())
+    ));
+    out.push_str(&format!("  \"sample_rate\": {},\n", sample_rate));
+    out.push_str("  \"encoding\": \"unsigned_u8_pcm_center_128\",\n");
+    out.push_str("  \"chunks\": [\n");
+    for (i, chunk) in chunks.iter().enumerate() {
+        let comma = if i + 1 == chunks.len() { "" } else { "," };
+        out.push_str(&format!(
+            concat!(
+                "    {{\"id\": {}, \"path\": \"{}\", \"start_frame\": {}, ",
+                "\"end_frame\": {}, \"start_sample\": {}, \"sample_count\": {}, ",
+                "\"peak\": {:.6}, \"rms\": {:.6}}}{}\n"
+            ),
+            chunk.id,
+            json_escape(&chunk.path),
+            chunk.start_frame,
+            chunk.end_frame,
+            chunk.start_sample,
+            chunk.sample_count,
+            chunk.peak,
+            chunk.rms,
+            comma
+        ));
+    }
+    out.push_str("  ]\n");
+    out.push_str("}\n");
+    std::fs::write(path, out)
+}
+
 fn write_analysis_json(
     path: &Path,
     input: &Path,
@@ -819,7 +1004,7 @@ fn write_analysis_json(
     out.push_str(&format!("  \"duration\": {:.6},\n", duration));
     out.push_str(&format!("  \"frame_size\": {},\n", ANALYSIS_FRAME));
     out.push_str(&format!("  \"hop\": {},\n", ANALYSIS_HOP));
-    out.push_str("  \"pipeline\": [\"wav_decode_pcm16\", \"goertzel_pitch_tracking\", \"transient_detection\", \"frame_classification\"],\n");
+    out.push_str("  \"pipeline\": [\"wav_decode_pcm16\", \"goertzel_pitch_tracking\", \"transient_detection\", \"frame_classification\", \"split_track_export\", \"dac_candidate_extraction\"],\n");
     out.push_str("  \"events\": [\n");
     for (i, frame) in frames.iter().enumerate() {
         let comma = if i + 1 == frames.len() { "" } else { "," };
@@ -864,7 +1049,15 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
         .clone()
         .unwrap_or_else(|| default_analysis_path(input));
     let bundle_dir = out.parent().unwrap_or_else(|| Path::new("."));
+    let dac_chunks = extract_dac_chunks(bundle_dir, &wav, &frames)?;
     write_analysis_json(&out, input, &wav, &frames)?;
+    write_split_tracks(bundle_dir, input, &frames)?;
+    write_dac_chunks_json(
+        &bundle_dir.join("dac_chunks.json"),
+        input,
+        wav.sample_rate,
+        &dac_chunks,
+    )?;
     write_runtime_binary(
         &bundle_dir.join("events.vandbin"),
         wav.sample_rate,
@@ -887,11 +1080,12 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
         .filter(|frame| frame.class_name != "silence")
         .count();
     println!(
-        "analysed {} | {} frames, {} active, {} runtime events | wrote {}",
+        "analysed {} | {} frames, {} active, {} runtime events, {} dac chunks | wrote {}",
         input.display(),
         frames.len(),
         active,
         runtime_events.len(),
+        dac_chunks.len(),
         out.display()
     );
     Ok(())

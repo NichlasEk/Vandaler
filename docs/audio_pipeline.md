@@ -73,7 +73,7 @@ Next milestones:
 3. Add `.ym` export for debug and comparison.
 4. Add a tiny audio test ROM around the SGDK runtime player.
 5. Add optional heavy stem separation when a local model is available.
-6. Add DAC sample extraction and playback for drums/bass transients.
+6. Add DAC playback for exported drum/bass transient chunks.
 
 `debug.vgm` is intentionally a listening/debug artifact. It writes YM2612
 registers for two channels from the bass and lead tracks so the transcription can
@@ -99,6 +99,17 @@ Goertzel analyser, detects transient jumps and writes
 `vandaler-vand-audio-rust-v0` JSON with per-frame class, pitch and amplitude
 metadata. It also compresses analysis frames into `VandAudioEvent` runtime rows,
 writes `events.vandbin`, and exports SGDK-compatible `sgdk_audio.c/.h`.
+
+The Rust exporter also writes split intent tracks:
+
+- `fm_bass.json`
+- `fm_lead.json`
+- `psg_noise.json`
+- `dac_chunks.json`
+- `dac_chunks/chunk_XX.u8`
+
+The DAC chunks are unsigned 8-bit PCM centered at 128. They are candidate
+transient clips only; the SGDK runtime does not consume them yet.
 
 Pass `--install-sgdk` to copy that generated table to ignored
 `src/generated_audio.c/.h`. `make audio-test-generated` then builds the audio
