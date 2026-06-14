@@ -10,3 +10,5 @@ out/
 *.sym
 __pycache__/
 *.pyc
+audio/converted/*
+!audio/converted/.gitkeep
