@@ -33,7 +33,7 @@ enum CommandMode {
 
 fn usage() {
     eprintln!(
-        "usage:\n  vandaler-audio-lab gui\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
+        "usage:\n  vandaler-audio-lab gui\n  vandaler-audio-lab analyse-audio input.mp3|input.ogg|input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
     );
 }
 
@@ -52,7 +52,9 @@ fn parse_args() -> io::Result<Args> {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "render-rom" if command.is_none() => command = Some(CommandMode::RenderRom),
-            "analyse-wav" if command.is_none() => command = Some(CommandMode::AnalyseWav),
+            "analyse-audio" | "analyse-wav" if command.is_none() => {
+                command = Some(CommandMode::AnalyseWav)
+            }
             "gui" if command.is_none() => command = Some(CommandMode::Gui),
             "test-rom" if command.is_none() => {
                 command = Some(CommandMode::TestRom);
@@ -332,6 +334,13 @@ struct WavData {
     samples: Vec<f32>,
 }
 
+struct ImportedAudio {
+    wav: WavData,
+    analysis_input: PathBuf,
+    decoded_wav: Option<PathBuf>,
+    decoder: &'static str,
+}
+
 #[derive(Clone)]
 struct AnalysisFrame {
     index: usize,
@@ -382,6 +391,7 @@ struct AnalysisSummary {
     dac_chunks: usize,
     arrangement: PathBuf,
     bundle_dir: PathBuf,
+    import_metadata: PathBuf,
     dac_preview: PathBuf,
 }
 
@@ -466,6 +476,101 @@ fn read_wav_mono(path: &Path) -> io::Result<WavData> {
         sample_rate,
         samples,
     })
+}
+
+fn decode_audio_with_ffmpeg(input: &Path, bundle_dir: &Path) -> io::Result<PathBuf> {
+    std::fs::create_dir_all(bundle_dir)?;
+    let decoded = bundle_dir.join("source_import.wav");
+    let status = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(input)
+        .arg("-ac")
+        .arg("1")
+        .arg("-ar")
+        .arg(DEFAULT_RATE.to_string())
+        .arg("-sample_fmt")
+        .arg("s16")
+        .arg(&decoded)
+        .status()
+        .map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!("ffmpeg is required for non-PCM imports: {err}"),
+            )
+        })?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "ffmpeg failed to import {}",
+            input.display()
+        )));
+    }
+    Ok(decoded)
+}
+
+fn import_audio(input: &Path, bundle_dir: &Path) -> io::Result<ImportedAudio> {
+    let is_wav = input
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"));
+
+    if is_wav {
+        if let Ok(wav) = read_wav_mono(input) {
+            return Ok(ImportedAudio {
+                wav,
+                analysis_input: input.to_path_buf(),
+                decoded_wav: None,
+                decoder: "direct_pcm_wav",
+            });
+        }
+    }
+
+    let decoded = decode_audio_with_ffmpeg(input, bundle_dir)?;
+    let wav = read_wav_mono(&decoded)?;
+    Ok(ImportedAudio {
+        wav,
+        analysis_input: decoded.clone(),
+        decoded_wav: Some(decoded),
+        decoder: "ffmpeg_pcm16_mono",
+    })
+}
+
+fn write_import_metadata(path: &Path, source: &Path, imported: &ImportedAudio) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let duration = imported.wav.samples.len() as f32 / imported.wav.sample_rate as f32;
+    let decoded = imported
+        .decoded_wav
+        .as_ref()
+        .map(|path| format!("\"{}\"", json_escape(&path.display().to_string())))
+        .unwrap_or_else(|| "null".to_string());
+    let text = format!(
+        concat!(
+            "{{\n",
+            "  \"format\": \"vandaler-audio-import-rust-v0\",\n",
+            "  \"source\": \"{}\",\n",
+            "  \"analysis_input\": \"{}\",\n",
+            "  \"decoded_wav\": {},\n",
+            "  \"decoder\": \"{}\",\n",
+            "  \"sample_rate\": {},\n",
+            "  \"sample_count\": {},\n",
+            "  \"duration\": {:.6}\n",
+            "}}\n"
+        ),
+        json_escape(&source.display().to_string()),
+        json_escape(&imported.analysis_input.display().to_string()),
+        decoded,
+        imported.decoder,
+        imported.wav.sample_rate,
+        imported.wav.samples.len(),
+        duration
+    );
+    std::fs::write(path, text)
 }
 
 fn midi_to_hz(midi: i32) -> f32 {
@@ -1158,7 +1263,7 @@ fn write_analysis_json(
     out.push_str(&format!("  \"duration\": {:.6},\n", duration));
     out.push_str(&format!("  \"frame_size\": {},\n", ANALYSIS_FRAME));
     out.push_str(&format!("  \"hop\": {},\n", ANALYSIS_HOP));
-    out.push_str("  \"pipeline\": [\"wav_decode_pcm16\", \"goertzel_pitch_tracking\", \"transient_detection\", \"frame_classification\", \"split_track_export\", \"dac_candidate_extraction\"],\n");
+    out.push_str("  \"pipeline\": [\"audio_import_pcm16\", \"goertzel_pitch_tracking\", \"transient_detection\", \"frame_classification\", \"split_track_export\", \"dac_candidate_extraction\"],\n");
     out.push_str("  \"events\": [\n");
     for (i, frame) in frames.iter().enumerate() {
         let comma = if i + 1 == frames.len() { "" } else { "," };
@@ -1195,24 +1300,26 @@ fn analyse_input(
     out: Option<PathBuf>,
     install_sgdk: bool,
 ) -> io::Result<AnalysisSummary> {
-    let wav = read_wav_mono(input)?;
-    let frames = analyse_samples(&wav);
     let out = out.unwrap_or_else(|| default_analysis_path(input));
     let bundle_dir = out.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-    let dac_chunks = extract_dac_chunks(&bundle_dir, &wav, &frames)?;
-    let runtime_events = build_runtime_events(&frames, wav.sample_rate, &dac_chunks);
+    let imported = import_audio(input, &bundle_dir)?;
+    let frames = analyse_samples(&imported.wav);
+    let dac_chunks = extract_dac_chunks(&bundle_dir, &imported.wav, &frames)?;
+    let runtime_events = build_runtime_events(&frames, imported.wav.sample_rate, &dac_chunks);
+    let import_metadata = bundle_dir.join("import.json");
     let dac_preview = write_dac_preview_wav(&bundle_dir, &dac_chunks)?;
-    write_analysis_json(&out, input, &wav, &frames)?;
+    write_import_metadata(&import_metadata, input, &imported)?;
+    write_analysis_json(&out, input, &imported.wav, &frames)?;
     write_split_tracks(&bundle_dir, input, &frames)?;
     write_dac_chunks_json(
         &bundle_dir.join("dac_chunks.json"),
         input,
-        wav.sample_rate,
+        imported.wav.sample_rate,
         &dac_chunks,
     )?;
     write_runtime_binary(
         &bundle_dir.join("events.vandbin"),
-        wav.sample_rate,
+        imported.wav.sample_rate,
         &runtime_events,
     )?;
     write_sgdk_audio(
@@ -1240,6 +1347,7 @@ fn analyse_input(
         dac_chunks: dac_chunks.len(),
         arrangement: out,
         bundle_dir,
+        import_metadata,
         dac_preview,
     })
 }
@@ -1248,7 +1356,7 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
     let input = args
         .rom
         .as_deref()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing WAV path"))?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing audio path"))?;
     let summary = analyse_input(input, args.out.clone(), args.install_sgdk)?;
     println!(
         "analysed {} | {} frames, {} active, {} runtime events, {} dac chunks | wrote {}",
@@ -1299,7 +1407,7 @@ fn print_gui_help(selected: Option<&Path>, last: Option<&AnalysisSummary>) {
     }
     println!();
     println!("commands:");
-    println!("  o <wav>  open 16-bit PCM WAV");
+    println!("  o <audio> open MP3/OGG/FLAC/WAV");
     println!("  a        analyse/export current source");
     println!("  p        play original source with PipeWire");
     println!("  d        play DAC chunk audition WAV");
@@ -1325,7 +1433,7 @@ fn launch_gui() -> io::Result<()> {
             "o" | "open" => {
                 let path_text = parts.collect::<Vec<_>>().join(" ");
                 if path_text.is_empty() {
-                    println!("open needs a WAV path");
+                    println!("open needs an audio path");
                     continue;
                 }
                 selected = Some(PathBuf::from(path_text));
@@ -1334,15 +1442,16 @@ fn launch_gui() -> io::Result<()> {
             }
             "a" | "analyse" | "analyze" => {
                 let Some(path) = selected.as_deref() else {
-                    println!("choose a WAV first with: o path/to/file.wav");
+                    println!("choose audio first with: o path/to/file.ogg");
                     continue;
                 };
                 println!("analysing {} ...", path.display());
                 match analyse_input(path, None, false) {
                     Ok(summary) => {
                         println!(
-                            "wrote {} and {}",
+                            "wrote {}, {}, and {}",
                             summary.arrangement.display(),
+                            summary.import_metadata.display(),
                             summary.dac_preview.display()
                         );
                         last_summary = Some(summary);
@@ -1352,7 +1461,7 @@ fn launch_gui() -> io::Result<()> {
             }
             "p" | "play" => {
                 let Some(path) = selected.as_deref() else {
-                    println!("choose a WAV first with: o path/to/file.wav");
+                    println!("choose audio first with: o path/to/file.ogg");
                     continue;
                 };
                 if let Err(err) = play_audio(path) {

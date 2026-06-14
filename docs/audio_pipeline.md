@@ -28,8 +28,9 @@ make audio-gui
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- test-rom --seconds 5
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- gui
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- render-rom out/audio-test.bin --wav out/audio-test.wav --report out/audio-test-report.json --seconds 5
+cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-audio path/to/song.ogg --out audio/converted/song.vand-audio/arrangement.vand-audio.json
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-wav out/audio-test.wav --out out/audio-test-analysis.vand-audio.json
-cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-wav out/audio-test.wav --out audio/converted/audio-test.vand-audio/arrangement.vand-audio.json --install-sgdk
+cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-audio out/audio-test.wav --out audio/converted/audio-test.vand-audio/arrangement.vand-audio.json --install-sgdk
 make audio-test-generated
 make audio-generated-loop
 ```
@@ -37,6 +38,7 @@ make audio-generated-loop
 It writes a bundle:
 
 - `audio/converted/<name>.vand-audio/arrangement.vand-audio.json`
+- `audio/converted/<name>.vand-audio/import.json`
 - `audio/converted/<name>.vand-audio/fm_bass.json`
 - `audio/converted/<name>.vand-audio/fm_lead.json`
 - `audio/converted/<name>.vand-audio/psg_noise.json`
@@ -97,14 +99,19 @@ i16 audio, writes a WAV and JSON report, and can hand it to PipeWire with
 headlessly through the same backend.
 
 `gui` starts the first Rust-side lab UI under the title `Vand-AI-lism`. It is
-currently a dependency-light terminal UI with commands to select a WAV, analyse
-and export it, play the original through PipeWire, audition extracted DAC chunks,
-and build/render the SGDK audio test ROM. This keeps the same headless backend
-while leaving room for a richer graphical front-end later.
+currently a dependency-light terminal UI with commands to select an audio file,
+analyse and export it, play the original through PipeWire, audition extracted
+DAC chunks, and build/render the SGDK audio test ROM. This keeps the same
+headless backend while leaving room for a richer graphical front-end later.
 
-`analyse-wav` is the first Rust-native transcription pass. It currently accepts
-16-bit PCM WAV, mixes to mono, tracks bass/lead note candidates with a small
-Goertzel analyser, detects transient jumps and writes
+`analyse-audio` is the first Rust-native import/transcription pass. It accepts
+direct 16-bit PCM WAV and can import MP3/OGG/FLAC/other ffmpeg-supported audio
+by decoding it to `source_import.wav` inside the output bundle. It writes
+`import.json` with source path, decoder, analysis input, sample rate and
+duration metadata. `analyse-wav` remains as a compatibility alias.
+
+After import, the analyser mixes to mono, tracks bass/lead note candidates with
+a small Goertzel analyser, detects transient jumps and writes
 `vandaler-vand-audio-rust-v0` JSON with per-frame class, pitch and amplitude
 metadata. It also compresses analysis frames into `VandAudioEvent` runtime rows,
 writes `events.vandbin`, and exports SGDK-compatible `sgdk_audio.c/.h`.
