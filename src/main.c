@@ -2,6 +2,8 @@
 #include <psg.h>
 #include "resources.h"
 #include "stage_tiles.h"
+#include "vand_audio.h"
+#include "malmo_music.h"
 #ifdef VAND_AUDIO_TEST_ROM
 #include "audio_test.h"
 #endif
@@ -484,6 +486,8 @@ static u8 hudHealth = 0xFF;
 static u8 hudCity = 0xFF;
 static u8 selectOverlayMonster = 0xFF;
 static bool selectOverlayVisible = FALSE;
+static VandAudioPlayer cityMusic;
+static bool cityMusicPlaying = FALSE;
 
 static ClimbContact getClimbContact(void);
 static RoofContact getRoofContact(void);
@@ -723,8 +727,11 @@ static void playTone(u16 tone, u8 length)
 static void stopTone(void)
 {
     PSG_setEnvelope(0, PSG_ENVELOPE_MIN);
-    PSG_setEnvelope(1, PSG_ENVELOPE_MIN);
-    PSG_setEnvelope(2, PSG_ENVELOPE_MIN);
+    if (!cityMusicPlaying)
+    {
+        PSG_setEnvelope(1, PSG_ENVELOPE_MIN);
+        PSG_setEnvelope(2, PSG_ENVELOPE_MIN);
+    }
     PSG_setEnvelope(3, PSG_ENVELOPE_MIN);
 }
 
@@ -741,6 +748,39 @@ static void playRotorTone(void)
 {
     PSG_setTone(1, 82 + ((frame >> 3) & 3));
     PSG_setEnvelope(1, 12);
+}
+
+static void stopCityMusic(void)
+{
+    if (!cityMusicPlaying) return;
+    VandAudio_stop(&cityMusic);
+    VandAudio_setDacBank(NULL, NULL, NULL, 0);
+    cityMusicPlaying = FALSE;
+}
+
+static void startCityMusic(void)
+{
+    if (currentCity != 0)
+    {
+        stopCityMusic();
+        return;
+    }
+
+    VandAudio_init();
+    VandAudio_setDacBank(malmoMusicDacSamples, malmoMusicDacLengths, malmoMusicDacRates, malmoMusicDacCount);
+    VandAudio_start(&cityMusic, malmoMusicEvents, malmoMusicEventCount, TRUE);
+    cityMusicPlaying = TRUE;
+}
+
+static void updateCityMusic(void)
+{
+    if (state != STATE_PLAY || currentCity != 0)
+    {
+        stopCityMusic();
+        return;
+    }
+
+    if (cityMusicPlaying) VandAudio_update(&cityMusic);
 }
 
 static void clearAll(void)
@@ -2529,6 +2569,7 @@ static void startCity(void)
     VDP_fillTileMapRect(BG_A, 0, 0, 0, SCREEN_TILES_W, SCREEN_TILES_H);
     drawHud();
     updatePlayerSprite();
+    startCityMusic();
 }
 
 static void spawnEnemy(void)
@@ -4106,6 +4147,7 @@ int main(bool hardReset)
         handleState(joy);
 
         if ((frame & 7) == 0) stopTone();
+        updateCityMusic();
         frame++;
         SPR_update();
         SYS_doVBlankProcess();

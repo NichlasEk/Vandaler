@@ -1,4 +1,4 @@
-use euther_oxide::Emulator;
+use euther_oxide::{Emulator, controller::Controller};
 use std::env;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -21,6 +21,7 @@ struct Args {
     sample_rate: u32,
     play: bool,
     install_sgdk: bool,
+    start_malmo: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -33,7 +34,7 @@ enum CommandMode {
 
 fn usage() {
     eprintln!(
-        "usage:\n  vandaler-audio-lab gui\n  vandaler-audio-lab analyse-audio input.mp3|input.ogg|input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
+        "usage:\n  vandaler-audio-lab gui\n  vandaler-audio-lab analyse-audio input.mp3|input.ogg|input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play] [--start-malmo]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
     );
 }
 
@@ -48,6 +49,7 @@ fn parse_args() -> io::Result<Args> {
     let mut sample_rate = DEFAULT_RATE;
     let mut play = false;
     let mut install_sgdk = false;
+    let mut start_malmo = false;
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -96,6 +98,7 @@ fn parse_args() -> io::Result<Args> {
                 })?;
             }
             "--play" => play = true,
+            "--start-malmo" => start_malmo = true,
             "--install-sgdk" => install_sgdk = true,
             "-h" | "--help" => {
                 usage();
@@ -138,6 +141,7 @@ fn parse_args() -> io::Result<Args> {
         sample_rate,
         play,
         install_sgdk,
+        start_malmo,
     })
 }
 
@@ -257,13 +261,21 @@ fn render_rom_to_wav(
     seconds: u32,
     sample_rate: u32,
     play: bool,
+    start_malmo: bool,
 ) -> io::Result<AudioStats> {
     let mut emulator = Emulator::new();
     let mut pcm = Vec::new();
     let frames = seconds.saturating_mul(60).max(1);
 
     emulator.load_rom_file(rom)?;
-    for _ in 0..frames {
+    for frame in 0..frames {
+        if start_malmo {
+            let press_start = matches!(frame, 12 | 28);
+            emulator
+                .bus
+                .controller_a
+                .set_pressed(Controller::START, press_start);
+        }
         emulator.run_frame();
         pcm.extend(emulator.render_audio_frame_i16_stereo(sample_rate as usize));
     }
@@ -312,6 +324,7 @@ fn render_rom(args: &Args) -> io::Result<()> {
         args.seconds,
         args.sample_rate,
         args.play,
+        args.start_malmo,
     )?;
     Ok(())
 }
@@ -325,6 +338,7 @@ fn test_rom(args: &Args) -> io::Result<()> {
         args.seconds,
         args.sample_rate,
         args.play,
+        false,
     )?;
     Ok(())
 }
@@ -1516,6 +1530,7 @@ fn launch_gui() -> io::Result<()> {
                     sample_rate: DEFAULT_RATE,
                     play: true,
                     install_sgdk: false,
+                    start_malmo: false,
                 };
                 if let Err(err) = test_rom(&args) {
                     println!("test ROM failed: {err}");

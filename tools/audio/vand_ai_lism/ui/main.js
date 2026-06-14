@@ -8,11 +8,6 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
-function pathToFileUrl(path) {
-  const normalized = path.replaceAll("\\", "/");
-  return `file://${normalized.split("/").map(encodeURIComponent).join("/")}`;
-}
-
 function setLog(message) {
   $("log").textContent = message;
 }
@@ -98,16 +93,27 @@ async function analyse() {
   }
 }
 
+async function loadPlayer(playerId, path, label) {
+  if (!path) return;
+  const player = $(playerId);
+  setLog(`Loading ${label}...\n${path}`);
+  try {
+    player.src = await invoke("audio_data_url", { path });
+    await player.play();
+    setLog(`Playing ${label}:\n${path}`);
+  } catch (err) {
+    setLog(`${label} playback failed:\n${err}`);
+  }
+}
+
 function loadOriginal() {
   if (!state.source) return;
-  $("originalPlayer").src = pathToFileUrl(state.source);
-  $("originalPlayer").play();
+  loadPlayer("originalPlayer", state.source, "original");
 }
 
 function loadDac() {
   if (!state.summary?.dac_preview) return;
-  $("dacPlayer").src = pathToFileUrl(state.summary.dac_preview);
-  $("dacPlayer").play();
+  loadPlayer("dacPlayer", state.summary.dac_preview, "DAC preview");
 }
 
 $("openBtn").addEventListener("click", chooseAudio);
