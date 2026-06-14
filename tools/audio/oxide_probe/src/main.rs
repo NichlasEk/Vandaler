@@ -9,6 +9,7 @@ const DEFAULT_SECONDS: u32 = 5;
 const DEFAULT_RATE: u32 = 44_100;
 
 struct Args {
+    command: CommandMode,
     rom: PathBuf,
     wav: PathBuf,
     seconds: u32,
@@ -16,14 +17,20 @@ struct Args {
     play: bool,
 }
 
+#[derive(Clone, Copy)]
+enum CommandMode {
+    RenderRom,
+}
+
 fn usage() {
     eprintln!(
-        "usage: oxide_probe ROM [--wav out.wav] [--seconds N] [--rate HZ] [--play]"
+        "usage: vandaler-audio-lab render-rom ROM [--wav out.wav] [--seconds N] [--rate HZ] [--play]"
     );
 }
 
 fn parse_args() -> io::Result<Args> {
     let mut iter = env::args().skip(1);
+    let mut command = None;
     let mut rom = None;
     let mut wav = PathBuf::from("out/oxide-audio-probe.wav");
     let mut seconds = DEFAULT_SECONDS;
@@ -32,6 +39,7 @@ fn parse_args() -> io::Result<Args> {
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "render-rom" if command.is_none() => command = Some(CommandMode::RenderRom),
             "--wav" => {
                 let value = iter.next().ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidInput, "--wav needs a path")
@@ -66,6 +74,9 @@ fn parse_args() -> io::Result<Args> {
                 ));
             }
             other => {
+                if command.is_none() {
+                    command = Some(CommandMode::RenderRom);
+                }
                 if rom.replace(PathBuf::from(other)).is_some() {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -76,8 +87,10 @@ fn parse_args() -> io::Result<Args> {
         }
     }
 
+    let command = command.unwrap_or(CommandMode::RenderRom);
     let rom = rom.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing ROM path"))?;
     Ok(Args {
+        command,
         rom,
         wav,
         seconds,
@@ -115,8 +128,7 @@ fn write_wav_i16_stereo(path: &Path, sample_rate: u32, samples: &[i16]) -> io::R
     Ok(())
 }
 
-fn run() -> io::Result<()> {
-    let args = parse_args()?;
+fn render_rom(args: &Args) -> io::Result<()> {
     let mut emulator = Emulator::new();
     let mut pcm = Vec::new();
     let frames = args.seconds.saturating_mul(60).max(1);
@@ -143,6 +155,13 @@ fn run() -> io::Result<()> {
     }
 
     Ok(())
+}
+
+fn run() -> io::Result<()> {
+    let args = parse_args()?;
+    match args.command {
+        CommandMode::RenderRom => render_rom(&args),
+    }
 }
 
 fn main() {
