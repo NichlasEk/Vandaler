@@ -73,7 +73,7 @@ Next milestones:
 3. Add `.ym` export for debug and comparison.
 4. Add a tiny audio test ROM around the SGDK runtime player.
 5. Add optional heavy stem separation when a local model is available.
-6. Add DAC playback for exported drum/bass transient chunks.
+6. Move DAC playback from the current coarse frame pump to a proper timed mixer.
 
 `debug.vgm` is intentionally a listening/debug artifact. It writes YM2612
 registers for two channels from the bass and lead tracks so the transcription can
@@ -108,10 +108,14 @@ The Rust exporter also writes split intent tracks:
 - `dac_chunks.json`
 - `dac_chunks/chunk_XX.u8`
 
-The DAC chunks are unsigned 8-bit PCM centered at 128. They are candidate
-transient clips only; the SGDK runtime does not consume them yet.
+The DAC chunks are unsigned 8-bit PCM centered at 128. Generated SGDK tables
+also export those chunks as C arrays, and `VandAudioEvent` rows can trigger a
+chunk by id. The first runtime path pumps a fixed number of YM2612 DAC bytes per
+game tick, so it is useful for crunchy transient proof-of-life but is not yet a
+proper sample-rate-accurate DAC mixer.
 
 Pass `--install-sgdk` to copy that generated table to ignored
-`src/generated_audio.c/.h`. `make audio-test-generated` then builds the audio
-test ROM with `VAND_AUDIO_GENERATED`, so the ROM plays the generated
+`out/generated_audio.c/.h`. `make audio-test-generated` then copies those files
+into `src/` only for the generated test build, removes them again, and builds
+the audio test ROM with `VAND_AUDIO_GENERATED`, so the ROM plays the generated
 arrangement instead of the hardcoded smoke-test pattern.

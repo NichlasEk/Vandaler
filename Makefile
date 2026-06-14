@@ -2,6 +2,10 @@ GDK ?= /home/nichlas/SGDK
 PREFIX ?= ./tools/m68k-elf-
 SGDK_WINE ?= 1
 
+ifneq ($(findstring -DVAND_AUDIO_GENERATED,$(EXTRA_FLAGS)),-DVAND_AUDIO_GENERATED)
+$(shell rm -f src/generated_audio.c src/generated_audio.h)
+endif
+
 .PHONY: assets assets-preview audio-test audio-test-generated audio-lab audio-lab-headless audio-analyse-test audio-generated-loop
 
 assets:
@@ -18,11 +22,8 @@ audio-test:
 	$(MAKE)
 
 audio-test-generated:
-	$(MAKE) clean-release
-	$(MAKE) EXTRA_FLAGS="$(EXTRA_FLAGS) -DVAND_AUDIO_TEST_ROM -DVAND_AUDIO_GENERATED"
-	cp out/release/rom.bin out/audio-test.bin
-	$(MAKE) clean-release
-	$(MAKE)
+	@if [ ! -f out/generated_audio.c ] || [ ! -f out/generated_audio.h ]; then echo "missing out/generated_audio.c/.h; run analyse-wav --install-sgdk first"; exit 1; fi
+	@set -e; trap 'rm -f src/generated_audio.c src/generated_audio.h' EXIT; $(MAKE) clean-release; cp out/generated_audio.c src/generated_audio.c; cp out/generated_audio.h src/generated_audio.h; $(MAKE) EXTRA_FLAGS="$(EXTRA_FLAGS) -DVAND_AUDIO_TEST_ROM -DVAND_AUDIO_GENERATED"; cp out/release/rom.bin out/audio-test.bin; rm -f src/generated_audio.c src/generated_audio.h; $(MAKE) clean-release; $(MAKE)
 
 audio-lab: audio-test
 	cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- render-rom out/audio-test.bin --wav out/audio-test.wav --report out/audio-test-report.json --seconds 5

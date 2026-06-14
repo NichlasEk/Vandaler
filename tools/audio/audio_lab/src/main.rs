@@ -354,6 +354,8 @@ struct RuntimeEvent {
     fm1_level: u8,
     psg_noise_level: u8,
     kind: u8,
+    dac_chunk: u8,
+    dac_level: u8,
 }
 
 struct DacChunk {
@@ -365,6 +367,7 @@ struct DacChunk {
     peak: f32,
     rms: f32,
     path: String,
+    samples: Vec<u8>,
 }
 
 fn read_u16_le(bytes: &[u8]) -> u16 {
@@ -659,10 +662,23 @@ fn ym2612_pitch(hz: f32) -> (u16, u8) {
     (best_fnum, best_block)
 }
 
-fn frame_to_runtime(frame: &AnalysisFrame) -> RuntimeEvent {
+fn frame_dac_chunk(frame: &AnalysisFrame, chunks: &[DacChunk]) -> (u8, u8) {
+    for chunk in chunks {
+        if chunk.start_frame == frame.index {
+            return (
+                chunk.id.min(254) as u8,
+                level15(frame.transient.max(frame.noise_amp)),
+            );
+        }
+    }
+    (255, 0)
+}
+
+fn frame_to_runtime(frame: &AnalysisFrame, chunks: &[DacChunk]) -> RuntimeEvent {
     let (fm0_fnum, fm0_block) = ym2612_pitch(frame.bass_hz);
     let (fm1_fnum, fm1_block) = ym2612_pitch(frame.lead_hz);
     let kind = class_id(frame.class_name);
+    let (dac_chunk, dac_level) = frame_dac_chunk(frame, chunks);
     let noise = if kind == 3 || kind == 4 {
         frame.noise_amp.max(frame.transient)
     } else {
@@ -687,6 +703,8 @@ fn frame_to_runtime(frame: &AnalysisFrame) -> RuntimeEvent {
         },
         psg_noise_level: level15(noise),
         kind,
+        dac_chunk,
+        dac_level,
     }
 }
 
@@ -699,6 +717,8 @@ fn equivalent_runtime(a: &RuntimeEvent, b: &RuntimeEvent) -> bool {
         && a.fm1_level == b.fm1_level
         && a.psg_noise_level == b.psg_noise_level
         && a.kind == b.kind
+        && a.dac_chunk == b.dac_chunk
+        && a.dac_level == b.dac_level
 }
 
 fn runtime_ticks(frame_count: usize, sample_rate: u32) -> u16 {
@@ -706,13 +726,17 @@ fn runtime_ticks(frame_count: usize, sample_rate: u32) -> u16 {
     (seconds * 60.0).round().clamp(1.0, u16::MAX as f32) as u16
 }
 
-fn build_runtime_events(frames: &[AnalysisFrame], sample_rate: u32) -> Vec<RuntimeEvent> {
+fn build_runtime_events(
+    frames: &[AnalysisFrame],
+    sample_rate: u32,
+    chunks: &[DacChunk],
+) -> Vec<RuntimeEvent> {
     let mut out = Vec::new();
     let mut pending: Option<RuntimeEvent> = None;
     let mut pending_frames = 0usize;
 
     for frame in frames {
-        let next = frame_to_runtime(frame);
+        let next = frame_to_runtime(frame, chunks);
         match pending.as_mut() {
             Some(current) if equivalent_runtime(current, &next) => {
                 pending_frames += 1;
@@ -745,7 +769,7 @@ fn write_runtime_binary(path: &Path, sample_rate: u32, events: &[RuntimeEvent]) 
 
     let mut file = File::create(path)?;
     file.write_all(b"VADB")?;
-    file.write_all(&1u16.to_le_bytes())?;
+    file.write_all(&2u16.to_le_bytes())?;
     file.write_all(&(events.len() as u16).to_le_bytes())?;
     file.write_all(&(ANALYSIS_HOP as u16).to_le_bytes())?;
     file.write_all(&sample_rate.to_le_bytes())?;
@@ -757,12 +781,18 @@ fn write_runtime_binary(path: &Path, sample_rate: u32, events: &[RuntimeEvent]) 
         file.write_all(&event.fm1_fnum.to_le_bytes())?;
         file.write_all(&[event.fm1_block, event.fm1_level])?;
         file.write_all(&[event.psg_noise_level, event.kind])?;
+        file.write_all(&[event.dac_chunk, event.dac_level])?;
     }
 
     Ok(())
 }
 
-fn write_sgdk_audio(header: &Path, source: &Path, events: &[RuntimeEvent]) -> io::Result<()> {
+fn write_sgdk_audio(
+    header: &Path,
+    source: &Path,
+    events: &[RuntimeEvent],
+    chunks: &[DacChunk],
+) -> io::Result<()> {
     if let Some(parent) = header.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -776,6 +806,9 @@ fn write_sgdk_audio(header: &Path, source: &Path, events: &[RuntimeEvent]) -> io
         "#include \"vand_audio.h\"\n\n",
         "extern const VandAudioEvent generatedAudioEvents[];\n",
         "extern const u16 generatedAudioEventCount;\n\n",
+        "extern const u8 * const generatedAudioDacSamples[];\n",
+        "extern const u16 generatedAudioDacLengths[];\n",
+        "extern const u16 generatedAudioDacCount;\n\n",
         "#endif\n"
     );
     std::fs::write(header, header_text)?;
@@ -786,10 +819,46 @@ fn write_sgdk_audio(header: &Path, source: &Path, events: &[RuntimeEvent]) -> io
         .unwrap_or("generated_audio.h");
     let mut c = String::new();
     c.push_str(&format!("#include \"{}\"\n\n", include_name));
+    for chunk in chunks {
+        c.push_str(&format!(
+            "static const u8 generatedAudioDacChunk{:02}[] =\n{{\n",
+            chunk.id
+        ));
+        for row in chunk.samples.chunks(16) {
+            c.push_str("    ");
+            for sample in row {
+                c.push_str(&format!("{}, ", sample));
+            }
+            c.push('\n');
+        }
+        c.push_str("};\n\n");
+    }
+    c.push_str("const u8 * const generatedAudioDacSamples[] =\n{\n");
+    if chunks.is_empty() {
+        c.push_str("    NULL,\n");
+    } else {
+        for chunk in chunks {
+            c.push_str(&format!("    generatedAudioDacChunk{:02},\n", chunk.id));
+        }
+    }
+    c.push_str("};\n\n");
+    c.push_str("const u16 generatedAudioDacLengths[] =\n{\n");
+    if chunks.is_empty() {
+        c.push_str("    0,\n");
+    } else {
+        for chunk in chunks {
+            c.push_str(&format!("    {},\n", chunk.samples.len()));
+        }
+    }
+    c.push_str("};\n\n");
+    c.push_str(&format!(
+        "const u16 generatedAudioDacCount = {};\n\n",
+        chunks.len()
+    ));
     c.push_str("const VandAudioEvent generatedAudioEvents[] =\n{\n");
     for event in events {
         c.push_str(&format!(
-            "    {{{}, 0x{:03X}, {}, {}, 0x{:03X}, {}, {}, {}, {}}},\n",
+            "    {{{}, 0x{:03X}, {}, {}, 0x{:03X}, {}, {}, {}, {}, {}, {}}},\n",
             event.frames,
             event.fm0_fnum,
             event.fm0_block,
@@ -798,7 +867,9 @@ fn write_sgdk_audio(header: &Path, source: &Path, events: &[RuntimeEvent]) -> io
             event.fm1_block,
             event.fm1_level,
             event.psg_noise_level,
-            event.kind
+            event.kind,
+            event.dac_chunk,
+            event.dac_level
         ));
     }
     c.push_str("};\n\n");
@@ -919,7 +990,7 @@ fn extract_dac_chunks(
                     (normalized * 127.0 + 128.0).round().clamp(0.0, 255.0) as u8
                 })
                 .collect::<Vec<_>>();
-            std::fs::write(&path, pcm)?;
+            std::fs::write(&path, &pcm)?;
             chunks.push(DacChunk {
                 id: chunks.len(),
                 start_frame,
@@ -929,6 +1000,7 @@ fn extract_dac_chunks(
                 peak,
                 rms,
                 path: format!("dac_chunks/{file_name}"),
+                samples: pcm,
             });
         }
 
@@ -1043,13 +1115,13 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing WAV path"))?;
     let wav = read_wav_mono(input)?;
     let frames = analyse_samples(&wav);
-    let runtime_events = build_runtime_events(&frames, wav.sample_rate);
     let out = args
         .out
         .clone()
         .unwrap_or_else(|| default_analysis_path(input));
     let bundle_dir = out.parent().unwrap_or_else(|| Path::new("."));
     let dac_chunks = extract_dac_chunks(bundle_dir, &wav, &frames)?;
+    let runtime_events = build_runtime_events(&frames, wav.sample_rate, &dac_chunks);
     write_analysis_json(&out, input, &wav, &frames)?;
     write_split_tracks(bundle_dir, input, &frames)?;
     write_dac_chunks_json(
@@ -1067,12 +1139,14 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
         &bundle_dir.join("sgdk_audio.h"),
         &bundle_dir.join("sgdk_audio.c"),
         &runtime_events,
+        &dac_chunks,
     )?;
     if args.install_sgdk {
         write_sgdk_audio(
-            Path::new("src/generated_audio.h"),
-            Path::new("src/generated_audio.c"),
+            Path::new("out/generated_audio.h"),
+            Path::new("out/generated_audio.c"),
             &runtime_events,
+            &dac_chunks,
         )?;
     }
     let active = frames

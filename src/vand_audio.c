@@ -3,8 +3,17 @@
 #define VAND_AUDIO_FM_BASS_CH 0
 #define VAND_AUDIO_FM_LEAD_CH 1
 #define VAND_AUDIO_FM_KEY_ALL 0xF0
+#define VAND_AUDIO_DAC_NONE 255
+#define VAND_AUDIO_DAC_BYTES_PER_TICK 128
 
 static bool audioReady = FALSE;
+static const u8 * const *dacSamples = NULL;
+static const u16 *dacLengths = NULL;
+static u16 dacCount = 0;
+static const u8 *dacActive = NULL;
+static u16 dacLength = 0;
+static u16 dacPos = 0;
+static u8 dacLevel = 0;
 
 static void ymKey(u8 channel, bool on)
 {
@@ -64,6 +73,45 @@ static void psgSetNoiseLevel(u8 level, u8 kind)
     PSG_setEnvelope(3, envelope);
 }
 
+static void dacStop(void)
+{
+    dacActive = NULL;
+    dacLength = 0;
+    dacPos = 0;
+    dacLevel = 0;
+    YM2612_writeReg(0, 0x2A, 0x80);
+}
+
+static void dacStart(u8 chunk, u8 level)
+{
+    if ((chunk == VAND_AUDIO_DAC_NONE) || (level == 0) || (dacSamples == NULL) || (dacLengths == NULL) || (chunk >= dacCount)) return;
+
+    dacActive = dacSamples[chunk];
+    dacLength = dacLengths[chunk];
+    dacPos = 0;
+    dacLevel = level > 15 ? 15 : level;
+    if ((dacActive == NULL) || (dacLength == 0)) dacStop();
+}
+
+static void dacPump(void)
+{
+    u16 i;
+
+    if (dacActive == NULL) return;
+
+    for (i = 0; i < VAND_AUDIO_DAC_BYTES_PER_TICK; i++)
+    {
+        const s16 centered = (s16)dacActive[dacPos++] - 128;
+        const u8 sample = (u8)(128 + ((centered * dacLevel) / 15));
+        YM2612_writeReg(0, 0x2A, sample);
+        if (dacPos >= dacLength)
+        {
+            dacStop();
+            return;
+        }
+    }
+}
+
 static void applyEvent(const VandAudioEvent *event)
 {
     ymKey(VAND_AUDIO_FM_BASS_CH, FALSE);
@@ -83,17 +131,27 @@ static void applyEvent(const VandAudioEvent *event)
     }
 
     psgSetNoiseLevel(event->psg_noise_level, event->kind);
+    dacStart(event->dac_chunk, event->dac_level);
 }
 
 void VandAudio_init(void)
 {
     YM2612_writeReg(0, 0x22, 0x00);
     YM2612_writeReg(0, 0x27, 0x00);
-    YM2612_writeReg(0, 0x2B, 0x00);
+    YM2612_writeReg(0, 0x2B, 0x80);
+    YM2612_writeReg(0, 0x2A, 0x80);
     ymInitVoice(VAND_AUDIO_FM_BASS_CH, TRUE);
     ymInitVoice(VAND_AUDIO_FM_LEAD_CH, FALSE);
     PSG_setEnvelope(3, PSG_ENVELOPE_MIN);
     audioReady = TRUE;
+}
+
+void VandAudio_setDacBank(const u8 * const *samples, const u16 *lengths, u16 count)
+{
+    dacSamples = samples;
+    dacLengths = lengths;
+    dacCount = count;
+    dacStop();
 }
 
 void VandAudio_start(VandAudioPlayer *player, const VandAudioEvent *events, u16 eventCount, bool loop)
@@ -122,11 +180,14 @@ void VandAudio_stop(VandAudioPlayer *player)
     ymKey(VAND_AUDIO_FM_BASS_CH, FALSE);
     ymKey(VAND_AUDIO_FM_LEAD_CH, FALSE);
     PSG_setEnvelope(3, PSG_ENVELOPE_MIN);
+    dacStop();
 }
 
 void VandAudio_update(VandAudioPlayer *player)
 {
     const VandAudioEvent *event;
+
+    dacPump();
 
     if ((player == NULL) || !player->playing || (player->events == NULL)) return;
 

@@ -25,6 +25,8 @@ typedef struct
     u8 fm1_level;
     u8 psg_noise_level;
     u8 kind;
+    u8 dac_chunk;
+    u8 dac_level;
 } VandAudioEvent;
 
 typedef struct
@@ -38,6 +40,7 @@ typedef struct
 } VandAudioPlayer;
 
 void VandAudio_init(void);
+void VandAudio_setDacBank(const u8 * const *samples, const u16 *lengths, u16 count);
 void VandAudio_start(VandAudioPlayer *player, const VandAudioEvent *events, u16 eventCount, bool loop);
 void VandAudio_stop(VandAudioPlayer *player);
 void VandAudio_update(VandAudioPlayer *player);
