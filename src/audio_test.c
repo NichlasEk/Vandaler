@@ -1,6 +1,11 @@
 #include "audio_test.h"
 #include "vand_audio.h"
 
+#ifdef VAND_AUDIO_GENERATED
+#include "generated_audio.h"
+#endif
+
+#ifndef VAND_AUDIO_GENERATED
 static const VandAudioEvent audioTestPattern[] =
 {
     {12, 0x43B, 1, 15, 0x35B, 4, 10, 0, VAND_AUDIO_CLASS_BASS},
@@ -14,6 +19,14 @@ static const VandAudioEvent audioTestPattern[] =
     {6, 0x4B8, 2, 13, 0x43B, 4, 12, 15, VAND_AUDIO_CLASS_DRUM},
     {18, 0x000, 0, 0, 0x000, 0, 0, 0, VAND_AUDIO_CLASS_SILENCE},
 };
+#define AUDIO_TEST_EVENTS audioTestPattern
+#define AUDIO_TEST_EVENT_COUNT (sizeof(audioTestPattern) / sizeof(audioTestPattern[0]))
+#define AUDIO_TEST_SOURCE_TEXT "BUILTIN PATTERN"
+#else
+#define AUDIO_TEST_EVENTS generatedAudioEvents
+#define AUDIO_TEST_EVENT_COUNT generatedAudioEventCount
+#define AUDIO_TEST_SOURCE_TEXT "GENERATED ARRANGEMENT"
+#endif
 
 static void drawAudioTest(void)
 {
@@ -26,6 +39,7 @@ static void drawAudioTest(void)
     VDP_drawText("START: PLAY / STOP", 9, 12);
     VDP_drawText("A: RESTART", 14, 13);
     VDP_drawText("B: STOP", 16, 15);
+    VDP_drawText(AUDIO_TEST_SOURCE_TEXT, 9, 17);
     VDP_drawText("BUILD: make audio-test", 8, 21);
 }
 
@@ -53,7 +67,7 @@ int AudioTest_main(void)
     VandAudio_init();
     drawAudioTest();
 
-    VandAudio_start(&player, audioTestPattern, sizeof(audioTestPattern) / sizeof(audioTestPattern[0]), TRUE);
+    VandAudio_start(&player, AUDIO_TEST_EVENTS, AUDIO_TEST_EVENT_COUNT, TRUE);
     playing = TRUE;
 
     while (TRUE)
@@ -70,13 +84,13 @@ int AudioTest_main(void)
             }
             else
             {
-                VandAudio_start(&player, audioTestPattern, sizeof(audioTestPattern) / sizeof(audioTestPattern[0]), TRUE);
+                VandAudio_start(&player, AUDIO_TEST_EVENTS, AUDIO_TEST_EVENT_COUNT, TRUE);
                 playing = TRUE;
             }
         }
         if (pressed & BUTTON_A)
         {
-            VandAudio_start(&player, audioTestPattern, sizeof(audioTestPattern) / sizeof(audioTestPattern[0]), TRUE);
+            VandAudio_start(&player, AUDIO_TEST_EVENTS, AUDIO_TEST_EVENT_COUNT, TRUE);
             playing = TRUE;
         }
         if (pressed & BUTTON_B)

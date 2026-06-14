@@ -27,6 +27,9 @@ make audio-lab
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- test-rom --seconds 5
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- render-rom out/audio-test.bin --wav out/audio-test.wav --report out/audio-test-report.json --seconds 5
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-wav out/audio-test.wav --out out/audio-test-analysis.vand-audio.json
+cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-wav out/audio-test.wav --out audio/converted/audio-test.vand-audio/arrangement.vand-audio.json --install-sgdk
+make audio-test-generated
+make audio-generated-loop
 ```
 
 It writes a bundle:
@@ -94,4 +97,10 @@ headlessly through the same backend.
 16-bit PCM WAV, mixes to mono, tracks bass/lead note candidates with a small
 Goertzel analyser, detects transient jumps and writes
 `vandaler-vand-audio-rust-v0` JSON with per-frame class, pitch and amplitude
-metadata.
+metadata. It also compresses analysis frames into `VandAudioEvent` runtime rows,
+writes `events.vandbin`, and exports SGDK-compatible `sgdk_audio.c/.h`.
+
+Pass `--install-sgdk` to copy that generated table to ignored
+`src/generated_audio.c/.h`. `make audio-test-generated` then builds the audio
+test ROM with `VAND_AUDIO_GENERATED`, so the ROM plays the generated
+arrangement instead of the hardcoded smoke-test pattern.

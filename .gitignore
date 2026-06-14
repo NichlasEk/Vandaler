@@ -14,3 +14,5 @@ audio/converted/*
 !audio/converted/.gitkeep
 tools/audio/audio_lab/target/
 tools/audio/oxide_probe/target/
+src/generated_audio.c
+src/generated_audio.h

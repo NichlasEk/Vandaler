@@ -19,6 +19,7 @@ struct Args {
     seconds: u32,
     sample_rate: u32,
     play: bool,
+    install_sgdk: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -30,7 +31,7 @@ enum CommandMode {
 
 fn usage() {
     eprintln!(
-        "usage:\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
+        "usage:\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
     );
 }
 
@@ -44,6 +45,7 @@ fn parse_args() -> io::Result<Args> {
     let mut seconds = DEFAULT_SECONDS;
     let mut sample_rate = DEFAULT_RATE;
     let mut play = false;
+    let mut install_sgdk = false;
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -89,6 +91,7 @@ fn parse_args() -> io::Result<Args> {
                 })?;
             }
             "--play" => play = true,
+            "--install-sgdk" => install_sgdk = true,
             "-h" | "--help" => {
                 usage();
                 std::process::exit(0);
@@ -129,6 +132,7 @@ fn parse_args() -> io::Result<Args> {
         seconds,
         sample_rate,
         play,
+        install_sgdk,
     })
 }
 
@@ -337,6 +341,19 @@ struct AnalysisFrame {
     lead_amp: f32,
     noise_amp: f32,
     class_name: &'static str,
+}
+
+#[derive(Clone, PartialEq)]
+struct RuntimeEvent {
+    frames: u16,
+    fm0_fnum: u16,
+    fm0_block: u8,
+    fm0_level: u8,
+    fm1_fnum: u16,
+    fm1_block: u8,
+    fm1_level: u8,
+    psg_noise_level: u8,
+    kind: u8,
 }
 
 fn read_u16_le(bytes: &[u8]) -> u16 {
@@ -579,6 +596,207 @@ fn default_analysis_path(input: &Path) -> PathBuf {
         .join("arrangement.vand-audio.json")
 }
 
+fn class_id(name: &str) -> u8 {
+    match name {
+        "ambience" => 1,
+        "noise" => 2,
+        "sample" => 3,
+        "drum" => 4,
+        "bass" => 5,
+        "tonal" => 6,
+        _ => 0,
+    }
+}
+
+fn level15(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 15.0).round() as u8
+}
+
+fn ym2612_pitch(hz: f32) -> (u16, u8) {
+    const YM2612_CLOCK: f32 = 7_670_454.0;
+
+    if hz <= 0.0 {
+        return (0, 0);
+    }
+
+    let base = YM2612_CLOCK / 144.0;
+    let mut best_fnum = 0x400u16;
+    let mut best_block = 4u8;
+    let mut best_score = f32::MAX;
+
+    for block in 1..=7u8 {
+        let divider = 2.0f32.powi(block as i32 - 1);
+        let fnum = (hz * (1u32 << 20) as f32 / base / divider).round();
+        if (256.0..=2047.0).contains(&fnum) {
+            let score = (fnum - 1024.0).abs();
+            if score < best_score {
+                best_score = score;
+                best_fnum = fnum as u16;
+                best_block = block;
+            }
+        }
+    }
+
+    if best_score == f32::MAX {
+        let fnum = (hz * (1u32 << 20) as f32 / base / 8.0)
+            .round()
+            .clamp(256.0, 2047.0);
+        best_fnum = fnum as u16;
+        best_block = 4;
+    }
+
+    (best_fnum, best_block)
+}
+
+fn frame_to_runtime(frame: &AnalysisFrame) -> RuntimeEvent {
+    let (fm0_fnum, fm0_block) = ym2612_pitch(frame.bass_hz);
+    let (fm1_fnum, fm1_block) = ym2612_pitch(frame.lead_hz);
+    let kind = class_id(frame.class_name);
+    let noise = if kind == 3 || kind == 4 {
+        frame.noise_amp.max(frame.transient)
+    } else {
+        frame.noise_amp * 0.75
+    };
+
+    RuntimeEvent {
+        frames: 1,
+        fm0_fnum,
+        fm0_block,
+        fm0_level: if fm0_fnum == 0 {
+            0
+        } else {
+            level15(frame.bass_amp)
+        },
+        fm1_fnum,
+        fm1_block,
+        fm1_level: if fm1_fnum == 0 {
+            0
+        } else {
+            level15(frame.lead_amp)
+        },
+        psg_noise_level: level15(noise),
+        kind,
+    }
+}
+
+fn equivalent_runtime(a: &RuntimeEvent, b: &RuntimeEvent) -> bool {
+    a.fm0_fnum == b.fm0_fnum
+        && a.fm0_block == b.fm0_block
+        && a.fm0_level == b.fm0_level
+        && a.fm1_fnum == b.fm1_fnum
+        && a.fm1_block == b.fm1_block
+        && a.fm1_level == b.fm1_level
+        && a.psg_noise_level == b.psg_noise_level
+        && a.kind == b.kind
+}
+
+fn runtime_ticks(frame_count: usize, sample_rate: u32) -> u16 {
+    let seconds = frame_count as f32 * ANALYSIS_HOP as f32 / sample_rate as f32;
+    (seconds * 60.0).round().clamp(1.0, u16::MAX as f32) as u16
+}
+
+fn build_runtime_events(frames: &[AnalysisFrame], sample_rate: u32) -> Vec<RuntimeEvent> {
+    let mut out = Vec::new();
+    let mut pending: Option<RuntimeEvent> = None;
+    let mut pending_frames = 0usize;
+
+    for frame in frames {
+        let next = frame_to_runtime(frame);
+        match pending.as_mut() {
+            Some(current) if equivalent_runtime(current, &next) => {
+                pending_frames += 1;
+            }
+            Some(current) => {
+                current.frames = runtime_ticks(pending_frames, sample_rate);
+                out.push(current.clone());
+                pending = Some(next);
+                pending_frames = 1;
+            }
+            None => {
+                pending = Some(next);
+                pending_frames = 1;
+            }
+        }
+    }
+
+    if let Some(mut current) = pending {
+        current.frames = runtime_ticks(pending_frames, sample_rate);
+        out.push(current);
+    }
+
+    out
+}
+
+fn write_runtime_binary(path: &Path, sample_rate: u32, events: &[RuntimeEvent]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut file = File::create(path)?;
+    file.write_all(b"VADB")?;
+    file.write_all(&1u16.to_le_bytes())?;
+    file.write_all(&(events.len() as u16).to_le_bytes())?;
+    file.write_all(&(ANALYSIS_HOP as u16).to_le_bytes())?;
+    file.write_all(&sample_rate.to_le_bytes())?;
+
+    for event in events {
+        file.write_all(&event.frames.to_le_bytes())?;
+        file.write_all(&event.fm0_fnum.to_le_bytes())?;
+        file.write_all(&[event.fm0_block, event.fm0_level])?;
+        file.write_all(&event.fm1_fnum.to_le_bytes())?;
+        file.write_all(&[event.fm1_block, event.fm1_level])?;
+        file.write_all(&[event.psg_noise_level, event.kind])?;
+    }
+
+    Ok(())
+}
+
+fn write_sgdk_audio(header: &Path, source: &Path, events: &[RuntimeEvent]) -> io::Result<()> {
+    if let Some(parent) = header.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if let Some(parent) = source.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let header_text = concat!(
+        "#ifndef GENERATED_AUDIO_H\n",
+        "#define GENERATED_AUDIO_H\n\n",
+        "#include \"vand_audio.h\"\n\n",
+        "extern const VandAudioEvent generatedAudioEvents[];\n",
+        "extern const u16 generatedAudioEventCount;\n\n",
+        "#endif\n"
+    );
+    std::fs::write(header, header_text)?;
+
+    let include_name = header
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("generated_audio.h");
+    let mut c = String::new();
+    c.push_str(&format!("#include \"{}\"\n\n", include_name));
+    c.push_str("const VandAudioEvent generatedAudioEvents[] =\n{\n");
+    for event in events {
+        c.push_str(&format!(
+            "    {{{}, 0x{:03X}, {}, {}, 0x{:03X}, {}, {}, {}, {}}},\n",
+            event.frames,
+            event.fm0_fnum,
+            event.fm0_block,
+            event.fm0_level,
+            event.fm1_fnum,
+            event.fm1_block,
+            event.fm1_level,
+            event.psg_noise_level,
+            event.kind
+        ));
+    }
+    c.push_str("};\n\n");
+    c.push_str(
+        "const u16 generatedAudioEventCount = sizeof(generatedAudioEvents) / sizeof(generatedAudioEvents[0]);\n",
+    );
+    std::fs::write(source, c)
+}
+
 fn write_analysis_json(
     path: &Path,
     input: &Path,
@@ -640,20 +858,40 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing WAV path"))?;
     let wav = read_wav_mono(input)?;
     let frames = analyse_samples(&wav);
+    let runtime_events = build_runtime_events(&frames, wav.sample_rate);
     let out = args
         .out
         .clone()
         .unwrap_or_else(|| default_analysis_path(input));
+    let bundle_dir = out.parent().unwrap_or_else(|| Path::new("."));
     write_analysis_json(&out, input, &wav, &frames)?;
+    write_runtime_binary(
+        &bundle_dir.join("events.vandbin"),
+        wav.sample_rate,
+        &runtime_events,
+    )?;
+    write_sgdk_audio(
+        &bundle_dir.join("sgdk_audio.h"),
+        &bundle_dir.join("sgdk_audio.c"),
+        &runtime_events,
+    )?;
+    if args.install_sgdk {
+        write_sgdk_audio(
+            Path::new("src/generated_audio.h"),
+            Path::new("src/generated_audio.c"),
+            &runtime_events,
+        )?;
+    }
     let active = frames
         .iter()
         .filter(|frame| frame.class_name != "silence")
         .count();
     println!(
-        "analysed {} | {} frames, {} active | wrote {}",
+        "analysed {} | {} frames, {} active, {} runtime events | wrote {}",
         input.display(),
         frames.len(),
         active,
+        runtime_events.len(),
         out.display()
     );
     Ok(())
