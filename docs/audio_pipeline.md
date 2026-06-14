@@ -26,6 +26,7 @@ make audio-test
 make audio-lab
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- test-rom --seconds 5
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- render-rom out/audio-test.bin --wav out/audio-test.wav --report out/audio-test-report.json --seconds 5
+cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-wav out/audio-test.wav --out out/audio-test-analysis.vand-audio.json
 ```
 
 It writes a bundle:
@@ -88,3 +89,9 @@ its first host backend. `render-rom` loads a ROM, runs frames, renders stereo
 i16 audio, writes a WAV and JSON report, and can hand it to PipeWire with
 `--play`. `test-rom` builds the SGDK audio test ROM first and then renders it
 headlessly through the same backend.
+
+`analyse-wav` is the first Rust-native transcription pass. It currently accepts
+16-bit PCM WAV, mixes to mono, tracks bass/lead note candidates with a small
+Goertzel analyser, detects transient jumps and writes
+`vandaler-vand-audio-rust-v0` JSON with per-frame class, pitch and amplitude
+metadata.
