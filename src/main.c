@@ -76,6 +76,8 @@
 #define SHOT_HURT_Y 2
 #define SHOT_HURT_W 4
 #define SHOT_HURT_H 4
+#define SHOT_KIND_NORMAL 0
+#define SHOT_KIND_BEER_CAN 1
 #define PERSON_EAT_X -6
 #define PERSON_EAT_Y -4
 #define PERSON_EAT_W 24
@@ -311,6 +313,7 @@ typedef struct
     s16 dx;
     s16 dy;
     u8 stepTimer;
+    u8 kind;
     bool active;
     Sprite *sprite;
 } Shot;
@@ -2182,7 +2185,7 @@ static void updateThreatSprites(void)
         Shot *s = &shots[i];
         if (s->sprite == NULL)
         {
-            const SpriteDefinition *shotDef = currentCity == CITY_UMEA ? &beer_can_sprite : &shot_sprite;
+            const SpriteDefinition *shotDef = s->kind == SHOT_KIND_BEER_CAN ? &beer_can_sprite : &shot_sprite;
             s->sprite = SPR_addSprite(shotDef, s->x, s->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
         }
         SPR_setVisibility(s->sprite, s->active ? VISIBLE : HIDDEN);
@@ -2402,17 +2405,23 @@ static void spawnHelicopter(void)
     }
 }
 
-static void spawnShot(s16 x, s16 y, s16 dx, s16 dy)
+static void spawnShot(s16 x, s16 y, s16 dx, s16 dy, u8 kind)
 {
     for (u8 i = 0; i < MAX_SHOTS; i++)
     {
         if (!shots[i].active)
         {
+            if (shots[i].sprite != NULL && shots[i].kind != kind)
+            {
+                SPR_releaseSprite(shots[i].sprite);
+                shots[i].sprite = NULL;
+            }
             shots[i].x = x;
             shots[i].y = y;
             shots[i].dx = dx;
             shots[i].dy = dy;
             shots[i].stepTimer = 0;
+            shots[i].kind = kind;
             shots[i].active = TRUE;
             playTone(280, 4);
             return;
@@ -2737,7 +2746,7 @@ static void updateThreats(void)
         {
             const s16 dx = (player.x < t->x) ? -1 : 1;
             const s16 dy = currentCity == CITY_UMEA ? ((player.y + PLAYER_H / 2) < t->y ? -1 : 0) : -1;
-            spawnShot(t->x + 10, t->y - 2, dx, dy);
+            spawnShot(t->x + 10, t->y - 2, dx, dy, currentCity == CITY_UMEA ? SHOT_KIND_BEER_CAN : SHOT_KIND_NORMAL);
             t->cooldown = currentCity == CITY_UMEA ? 54 : 150;
         }
 
@@ -2795,7 +2804,7 @@ static void updateThreats(void)
             {
                 const s16 dx = (player.x < h->x) ? -1 : 1;
                 const s16 muzzleX = h->x + (dx < 0 ? 4 : 24);
-                spawnShot(muzzleX, h->y + 12, dx, 1);
+                spawnShot(muzzleX, h->y + 12, dx, 1, SHOT_KIND_NORMAL);
                 h->burst--;
                 h->burstDelay = 5;
                 if (h->burst == 0) h->cooldown = 150;
