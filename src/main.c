@@ -202,7 +202,6 @@
 #define TILE_WATER_FIST      (TILE_USER_INDEX + 109)
 #define TILE_SNOW_DOT        (TILE_USER_INDEX + 110)
 #define TILE_FALUN_RED       (TILE_USER_INDEX + 111)
-#define TILE_PANEL_DARK      (TILE_USER_INDEX + 112)
 
 typedef enum
 {
@@ -212,6 +211,7 @@ typedef enum
     STATE_INTRO,
     STATE_PLAY,
     STATE_CLEAR,
+    STATE_WIN,
     STATE_GAME_OVER
 } GameState;
 
@@ -398,7 +398,7 @@ static const u16 paletteLizard[16] =
 
 static const u16 paletteSelectOverlay[16] =
 {
-    RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0),
+    RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(7,6,0), RGB3_3_3_TO_VDPCOLOR(7,6,0), RGB3_3_3_TO_VDPCOLOR(7,6,0),
     RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0),
     RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0),
     RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(0,0,0), RGB3_3_3_TO_VDPCOLOR(7,6,0)
@@ -424,6 +424,7 @@ static const char *cities[] =
     "UMEÅ",
     "LULE"
 };
+#define CITY_COUNT ((u8)(sizeof(cities) / sizeof(cities[0])))
 
 static const u32 tileSnowDot[8] =
 {
@@ -447,18 +448,6 @@ static const u32 tileFalunRed[8] =
     0x8888888A,
     0x88888888,
     0xA8888A88
-};
-
-static const u32 tilePanelDark[8] =
-{
-    0xBBBBBBBB,
-    0xBBBBBBBB,
-    0xBBBBBBBB,
-    0xBBBBBBBB,
-    0xBBBBBBBB,
-    0xBBBBBBBB,
-    0xBBBBBBBB,
-    0xBBBBBBBB
 };
 
 static GameState state = STATE_TITLE;
@@ -718,7 +707,6 @@ static void loadTiles(void)
     VDP_loadTileData(tileWaterFist, TILE_WATER_FIST, 1, DMA);
     VDP_loadTileData(tileSnowDot, TILE_SNOW_DOT, 1, DMA);
     VDP_loadTileData(tileFalunRed, TILE_FALUN_RED, 1, DMA);
-    VDP_loadTileData(tilePanelDark, TILE_PANEL_DARK, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -761,7 +749,8 @@ static void clearAll(void)
 
 static void drawPanel(u8 x, u8 y, u8 w, u8 h)
 {
-    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_PANEL_DARK), x, y, w, h);
+    VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), x, y, w, h);
+    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_DARK), x, y, w, h);
     VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), x, y, w, 1);
     VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), x, y + h - 1, w, 1);
     VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), x, y, 1, h);
@@ -2332,7 +2321,7 @@ static void updateThreatSprites(void)
         Tank *t = &tanks[i];
         if (t->sprite == NULL)
         {
-            const SpriteDefinition *tankDef = currentCity == CITY_UMEA ? &epa_sprite : &tank_sprite;
+            const SpriteDefinition *tankDef = currentCity == CITY_LULE ? &snowmobile_sprite : (currentCity == CITY_UMEA ? &epa_sprite : &tank_sprite);
             t->sprite = SPR_addSprite(tankDef, t->x, t->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
         }
         SPR_setVisibility(t->sprite, t->active ? VISIBLE : HIDDEN);
@@ -2431,6 +2420,15 @@ static void drawTitle(void)
     drawFullscreenImage(&title_screen);
 }
 
+static void drawWin(void)
+{
+    drawFullscreenImage(&win_screen);
+    VDP_clearPlane(BG_A, TRUE);
+    PAL_setPalette(PAL3, paletteSelectOverlay, DMA);
+    VDP_setTextPalette(PAL3);
+    VDP_drawText("TRYCK START", 14, 20);
+}
+
 static void drawSelectOverlay(void)
 {
     static const u8 markerX[MAX_MONSTERS] = {5, 18, 31};
@@ -2493,6 +2491,8 @@ static void drawIntro(void)
 
 static void startCity(void)
 {
+    resetSpriteEngineState();
+    loadGameVideo();
     gavleGoatBurned = FALSE;
     bridgeStressTimer = 0;
     waterDamageTimer = 0;
@@ -2553,10 +2553,11 @@ static void spawnTank(void)
         if (!tanks[i].active)
         {
             const bool fromRight = ((frame >> 7) & 1) != 0;
-            tanks[i].x = fromRight ? 320 : -24;
+            tanks[i].x = fromRight ? 320 : (currentCity == CITY_LULE ? -32 : -24);
             tanks[i].y = groundActorY();
             tanks[i].speed = fromRight ? -1 : 1;
             if (currentCity == CITY_UMEA) tanks[i].speed *= 2;
+            if (currentCity == CITY_LULE) tanks[i].speed *= 3;
             tanks[i].stepTimer = 0;
             tanks[i].cooldown = currentCity == CITY_UMEA ? 38 + ((frame + i) & 31) : 120;
             tanks[i].waterTimer = 0;
@@ -2821,6 +2822,7 @@ static void updateThreats(void)
     else if (currentCity == CITY_LULE)
     {
         if ((frame % 96) == 0) spawnEnemy();
+        if ((frame % 220) == 80) spawnTank();
         if ((frame % 360) == 120) spawnHelicopter();
     }
     else
@@ -2896,6 +2898,7 @@ static void updateThreats(void)
     {
         Tank *t = &tanks[i];
         if (!t->active) continue;
+        const u8 tankW = currentCity == CITY_LULE ? 32 : 24;
 
         if (t->waterTimer > 0)
         {
@@ -2903,7 +2906,7 @@ static void updateThreats(void)
             t->y = (SUNDSVALL_BRIDGE_Y * 8) + 4;
             if (t->waterTimer == 0)
             {
-                t->x = sundsvallBridgeExitX(t->x + 12, t->speed, 24);
+                t->x = sundsvallBridgeExitX(t->x + (tankW / 2), t->speed, tankW);
                 t->y = groundActorY();
                 playTone(86, 4);
             }
@@ -2916,20 +2919,20 @@ static void updateThreats(void)
             t->stepTimer = 0;
             t->x += t->speed;
         }
-        if (startThreatWaterDrop(t->x + 12))
+        if (startThreatWaterDrop(t->x + (tankW / 2)))
         {
             t->waterTimer = SUNDSVALL_THREAT_WATER_FRAMES;
             t->y = (SUNDSVALL_BRIDGE_Y * 8) + 4;
             continue;
         }
-        if (t->x < -40 || t->x > 340)
+        if (t->x < -48 || t->x > 340)
         {
             t->active = FALSE;
             continue;
         }
 
-        if (t->cooldown > 0) t->cooldown--;
-        if (t->cooldown == 0)
+        if (currentCity != CITY_LULE && t->cooldown > 0) t->cooldown--;
+        if (currentCity != CITY_LULE && t->cooldown == 0)
         {
             const s16 dx = (player.x < t->x) ? -1 : 1;
             const s16 dy = currentCity == CITY_UMEA ? ((player.y + PLAYER_H / 2) < t->y ? -1 : 0) : -1;
@@ -2937,7 +2940,7 @@ static void updateThreats(void)
             t->cooldown = currentCity == CITY_UMEA ? 54 : 150;
         }
 
-        if (player.punching && rectsOverlap(player.attack.x, player.attack.y, player.attack.w, player.attack.h, t->x, t->y, 24, 16))
+        if (player.punching && rectsOverlap(player.attack.x, player.attack.y, player.attack.w, player.attack.h, t->x, t->y, tankW, 16))
         {
             spawnExplosion(t->x, t->y);
             t->active = FALSE;
@@ -2946,7 +2949,7 @@ static void updateThreats(void)
             continue;
         }
 
-        if (playerHitsRect(t->x + ENEMY_HURT_X, t->y + ENEMY_HURT_Y, ENEMY_HURT_W + 4, ENEMY_HURT_H))
+        if (playerHitsRect(t->x + ENEMY_HURT_X, t->y + ENEMY_HURT_Y, tankW - 4, ENEMY_HURT_H))
         {
             if (tailBouncing)
             {
@@ -3198,8 +3201,9 @@ static bool attackEnemies(AttackBox attack)
         Tank *t = &tanks[i];
         if (!t->active) continue;
         if (t->waterTimer > 0) continue;
+        const u8 tankW = currentCity == CITY_LULE ? 32 : 24;
 
-        if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, t->x, t->y, 24, 16))
+        if (rectsOverlap(attack.x, attack.y, attack.w, attack.h, t->x, t->y, tankW, 16))
         {
             spawnExplosion(t->x, t->y);
             t->active = FALSE;
@@ -4024,17 +4028,43 @@ static void handleState(u16 joy)
             redrawPlayFrame();
             if (cityCleared())
             {
-                state = STATE_CLEAR;
-                drawClear();
+                if (currentCity + 1 >= CITY_COUNT)
+                {
+                    state = STATE_WIN;
+                    drawWin();
+                }
+                else
+                {
+                    state = STATE_CLEAR;
+                    drawClear();
+                }
             }
             break;
 
         case STATE_CLEAR:
             if (pressed & BUTTON_START)
             {
-                currentCity = (currentCity + 1) % (sizeof(cities) / sizeof(cities[0]));
-                state = STATE_INTRO;
-                drawIntro();
+                if (currentCity + 1 >= CITY_COUNT)
+                {
+                    state = STATE_WIN;
+                    drawWin();
+                }
+                else
+                {
+                    currentCity++;
+                    state = STATE_INTRO;
+                    drawIntro();
+                }
+            }
+            break;
+
+        case STATE_WIN:
+            if (pressed & BUTTON_START)
+            {
+                score = 0;
+                currentCity = 0;
+                state = STATE_TITLE;
+                drawTitle();
             }
             break;
 

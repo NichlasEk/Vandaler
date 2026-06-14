@@ -88,6 +88,7 @@ def build_screen(source: Path, out: Path, *, select_screen: bool = False) -> Non
 def main() -> None:
     build_screen(ROOT / "art/source/title/vandaler_title_source_01.png", ROOT / "res/images/title.png")
     build_screen(ROOT / "art/source/title/vandaler_select_source_01.png", ROOT / "res/images/select.png", select_screen=True)
+    build_screen(ROOT / "art/source/title/vandaler_win_source_01.png", ROOT / "res/images/win.png")
 
 
 if __name__ == "__main__":

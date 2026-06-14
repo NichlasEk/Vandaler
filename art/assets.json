@@ -30,6 +30,7 @@
     {"name": "lule_winter", "source": "art/source/objects/lule_winter.png", "out": "res/images/lule_winter.png", "frame_width": 24, "frame_height": 16, "frames": 4},
     {"name": "tank", "source": "art/source/objects/tank.png", "out": "res/images/tank.png", "frame_width": 24, "frame_height": 16, "frames": 4},
     {"name": "epa", "source": "art/source/objects/epa.png", "out": "res/images/epa.png", "frame_width": 24, "frame_height": 16, "frames": 4},
+    {"name": "snowmobile", "source": "art/source/objects/snowmobile.png", "out": "res/images/snowmobile.png", "frame_width": 32, "frame_height": 16, "frames": 4},
     {"name": "helicopter", "source": "art/source/objects/helicopter.png", "out": "res/images/helicopter.png", "frame_width": 32, "frame_height": 16, "frames": 4},
     {"name": "reindeer", "source": "art/source/objects/reindeer.png", "out": "res/images/reindeer.png", "frame_width": 32, "frame_height": 16, "frames": 4},
     {"name": "person", "source": "art/source/objects/person.png", "out": "res/images/person.png", "frame_width": 8, "frame_height": 16, "frames": 4},
