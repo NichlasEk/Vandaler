@@ -20,11 +20,14 @@
 #define CITY_GAVLE 6
 #define CITY_SUNDSVALL 7
 #define CITY_UMEA 8
+#define CITY_LULE 9
 #define GAVLE_GOAT_INDEX 1
 #define GAVLE_ARSONIST_SPAWN_FRAMES 900
 #define GAVLE_ARSONIST_IGNITE_FRAMES 150
 #define UMEA_EPA_MUSIC_FRAMES 32
 #define UMEA_CHURCH_DAMAGE_BONUS 18
+#define LULE_THEATER_DAMAGE_BONUS 6
+#define LULE_SNOWFLAKES 12
 #define SUNDSVALL_BRIDGE_STRESS_FRAMES 120
 #define SUNDSVALL_BRIDGE_SEGMENTS 6
 #define SUNDSVALL_BRIDGE_SEGMENT_W 7
@@ -197,6 +200,9 @@
 #define TILE_BRIDGE_PIER     (TILE_USER_INDEX + 107)
 #define TILE_WATER_SURFACE   (TILE_USER_INDEX + 108)
 #define TILE_WATER_FIST      (TILE_USER_INDEX + 109)
+#define TILE_SNOW_DOT        (TILE_USER_INDEX + 110)
+#define TILE_FALUN_RED       (TILE_USER_INDEX + 111)
+#define TILE_PANEL_DARK      (TILE_USER_INDEX + 112)
 
 typedef enum
 {
@@ -416,7 +422,43 @@ static const char *cities[] =
     "GÄVLE",
     "SUNDSVALL",
     "UMEÅ",
-    "LULEÅ"
+    "LULE"
+};
+
+static const u32 tileSnowDot[8] =
+{
+    0x00000000,
+    0x000F0000,
+    0x00FFF000,
+    0x000F0000,
+    0x00000000,
+    0x0000F000,
+    0x00000000,
+    0x00000000
+};
+
+static const u32 tileFalunRed[8] =
+{
+    0x88888888,
+    0x8A88888A,
+    0x88888888,
+    0x888A8888,
+    0x8A888888,
+    0x8888888A,
+    0x88888888,
+    0xA8888A88
+};
+
+static const u32 tilePanelDark[8] =
+{
+    0xBBBBBBBB,
+    0xBBBBBBBB,
+    0xBBBBBBBB,
+    0xBBBBBBBB,
+    0xBBBBBBBB,
+    0xBBBBBBBB,
+    0xBBBBBBBB,
+    0xBBBBBBBB
 };
 
 static GameState state = STATE_TITLE;
@@ -674,6 +716,9 @@ static void loadTiles(void)
     VDP_loadTileData(tileBridgePier, TILE_BRIDGE_PIER, 1, DMA);
     VDP_loadTileData(tileWaterSurface, TILE_WATER_SURFACE, 1, DMA);
     VDP_loadTileData(tileWaterFist, TILE_WATER_FIST, 1, DMA);
+    VDP_loadTileData(tileSnowDot, TILE_SNOW_DOT, 1, DMA);
+    VDP_loadTileData(tileFalunRed, TILE_FALUN_RED, 1, DMA);
+    VDP_loadTileData(tilePanelDark, TILE_PANEL_DARK, 1, DMA);
 }
 
 static void playTone(u16 tone, u8 length)
@@ -716,7 +761,7 @@ static void clearAll(void)
 
 static void drawPanel(u8 x, u8 y, u8 w, u8 h)
 {
-    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_DARK), x, y, w, h);
+    VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_PANEL_DARK), x, y, w, h);
     VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), x, y, w, 1);
     VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), x, y + h - 1, w, 1);
     VDP_fillTileMapRect(BG_A, attr(PAL0, TILE_WHITE), x, y, 1, h);
@@ -802,6 +847,20 @@ static void drawRoad(void)
         {
             VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_BRIDGE_PIER), x, bridgeY + 1, 1, SCREEN_TILES_H - bridgeY - 1);
         }
+        return;
+    }
+
+    if (currentCity == CITY_LULE)
+    {
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WHITE), 0, FLOOR_Y - 1, SCREEN_TILES_W, 1);
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROAD), 0, FLOOR_Y, SCREEN_TILES_W, 4);
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_WHITE), 0, FLOOR_Y, SCREEN_TILES_W, 1);
+        for (u8 x = 1; x < SCREEN_TILES_W; x += 5)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_SNOW_DOT), x, FLOOR_Y - 2);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_SNOW_DOT), x + 2, FLOOR_Y);
+        }
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_DARK), 0, FLOOR_Y + 4, SCREEN_TILES_W, 1);
         return;
     }
 
@@ -923,6 +982,15 @@ static void initBuildings(void)
             buildings[i].w = sw[i];
             buildings[i].h = sh[i];
         }
+        if (currentCity == CITY_LULE)
+        {
+            const s16 sx[MAX_BUILDINGS] = {5, 10, 16, 22, 28};
+            const u8 sw[MAX_BUILDINGS] = {5, 6, 6, 6, 7};
+            const u8 sh[MAX_BUILDINGS] = {7, 8, 10, 8, 7};
+            buildings[i].x = sx[i];
+            buildings[i].w = sw[i];
+            buildings[i].h = sh[i];
+        }
         if (currentCity == 0 && i == 1)
         {
             buildings[i].h = 16;
@@ -953,6 +1021,10 @@ static void initBuildings(void)
             buildings[i].y = buildings[1].y - buildings[i].h;
         }
         if (currentCity == CITY_UMEA && i == 2)
+        {
+            buildings[i].y = FLOOR_Y - buildings[i].h;
+        }
+        if (currentCity == CITY_LULE)
         {
             buildings[i].y = FLOOR_Y - buildings[i].h;
         }
@@ -1146,6 +1218,43 @@ static bool isGavleGoatBuilding(const Building *b)
     return currentCity == CITY_GAVLE && b == &buildings[GAVLE_GOAT_INDEX];
 }
 
+static bool isLuleTheaterBuilding(const Building *b)
+{
+    return currentCity == CITY_LULE && b >= &buildings[0] && b < &buildings[MAX_BUILDINGS];
+}
+
+static u8 luleLeftmostStandingBuilding(void)
+{
+    for (u8 i = 0; i < MAX_BUILDINGS; i++)
+    {
+        if (buildings[i].alive && !buildings[i].collapsing) return i;
+    }
+    return MAX_BUILDINGS;
+}
+
+static u8 luleRightmostStandingBuilding(void)
+{
+    for (u8 step = 0; step < MAX_BUILDINGS; step++)
+    {
+        const u8 i = (MAX_BUILDINGS - 1) - step;
+        if (buildings[i].alive && !buildings[i].collapsing) return (u8)i;
+    }
+    return MAX_BUILDINGS;
+}
+
+static bool luleCanDamageBuilding(const Building *b, u8 hitX)
+{
+    if (!isLuleTheaterBuilding(b)) return TRUE;
+
+    const u8 index = (u8)(b - buildings);
+    const u8 left = luleLeftmostStandingBuilding();
+    const u8 right = luleRightmostStandingBuilding();
+    const bool hitLeftEdge = hitX <= b->x + 1;
+    const bool hitRightEdge = hitX + 1 >= b->x + b->w;
+
+    return (index == left && hitLeftEdge) || (index == right && hitRightEdge);
+}
+
 static u8 buildingBaseY(const Building *b)
 {
     if (isCityHallTowerBuilding(b) || (isCathedralTowerBuilding(b) && currentCity != CITY_UMEA)) return buildings[1].y;
@@ -1185,6 +1294,7 @@ static u8 buildingDamageLimit(const Building *b)
 {
     if (isGavleGoatBuilding(b)) return b->h + 8;
     if (currentCity == CITY_UMEA && (isCathedralBodyBuilding(b) || isCathedralTowerBuilding(b))) return b->h + UMEA_CHURCH_DAMAGE_BONUS;
+    if (isLuleTheaterBuilding(b)) return b->h + LULE_THEATER_DAMAGE_BONUS;
     return b->h + ((isCityHallBuilding(b) || isCityHallTowerBuilding(b) || isCathedralBodyBuilding(b) || isCathedralTowerBuilding(b)) ? 8 : 2);
 }
 
@@ -1735,6 +1845,66 @@ static void drawGavleGoatRuin(void)
     VDP_setTileMapXY(BG_B, attr(PAL0, TILE_RED), b->x + 6, FLOOR_Y - 6);
 }
 
+static void drawLuleTheaterBuilding(const Building *b, u8 visibleH, u8 drawY)
+{
+    const u8 idx = (u8)(b - buildings);
+
+    for (u8 yy = 0; yy < visibleH; yy++)
+    {
+        const u8 worldY = drawY + yy;
+        const u8 rel = worldY - b->y;
+
+        if (rel == 0)
+        {
+            VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_ROOF_DARK), b->x, worldY, b->w, 1);
+            if (idx == 2 && !b->collapsing && worldY > HUD_TILES_H)
+            {
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_YELLOW), b->x + 1, worldY - 1);
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_YELLOW), b->x + 3, worldY - 2);
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_YELLOW), b->x + 5, worldY - 1);
+            }
+            continue;
+        }
+
+        VDP_fillTileMapRect(BG_B, attr(PAL0, TILE_FALUN_RED), b->x, worldY, b->w, 1);
+        if ((rel & 3) == 0)
+        {
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WHITE), b->x, worldY);
+            VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WHITE), b->x + b->w - 1, worldY);
+        }
+        if (rel == 1)
+        {
+            for (u8 xx = 2; xx + 1 < b->w; xx += 4)
+            {
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WHITE), b->x + xx, worldY);
+            }
+            continue;
+        }
+        if ((rel & 1) == 0 && rel < visibleH - 1)
+        {
+            for (u8 xx = 1; xx + 1 < b->w; xx += 3)
+            {
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WIN_LIT), b->x + xx, worldY);
+            }
+        }
+        if (rel == visibleH - 1)
+        {
+            for (u8 xx = 1; xx + 1 < b->w; xx += 4)
+            {
+                VDP_setTileMapXY(BG_B, attr(PAL0, TILE_WHITE), b->x + xx, worldY);
+            }
+            if (b->w > 3) VDP_setTileMapXY(BG_B, attr(PAL0, TILE_DOOR), b->x + (b->w / 2), worldY);
+        }
+    }
+
+    if (idx == 2 && !b->collapsing && visibleH > 6)
+    {
+        drawAsciiTextBg("NORR", b->x + 1, b->y + 2);
+        drawAsciiTextBg("BOTTEN", b->x, b->y + 3);
+        drawAsciiTextBg("TEATER", b->x, b->y + 4);
+    }
+}
+
 static void drawBuilding(const Building *b)
 {
     if (!b->alive && !b->collapsing) return;
@@ -1868,6 +2038,15 @@ static void drawBuilding(const Building *b)
     if (isGavleGoatBuilding(b))
     {
         drawGavleGoatBuilding(b, visibleH, drawY);
+        drawBuildingChunks(b, visibleH, drawY);
+        if (b->cracking) drawBuildingCracks(b, visibleH);
+        if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
+        return;
+    }
+
+    if (isLuleTheaterBuilding(b))
+    {
+        drawLuleTheaterBuilding(b, visibleH, drawY);
         drawBuildingChunks(b, visibleH, drawY);
         if (b->cracking) drawBuildingCracks(b, visibleH);
         if (b->collapsing) drawCollapseDust(b, buildingBaseY(b) - 1, b->collapseRows);
@@ -2136,7 +2315,8 @@ static void updateThreatSprites(void)
         Enemy *e = &enemies[i];
         if (e->sprite == NULL)
         {
-            e->sprite = SPR_addSprite(&enemy_sprite, e->x, e->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
+            const SpriteDefinition *enemyDef = currentCity == CITY_LULE ? &lule_winter_sprite : &enemy_sprite;
+            e->sprite = SPR_addSprite(enemyDef, e->x, e->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
         }
         SPR_setVisibility(e->sprite, e->active ? VISIBLE : HIDDEN);
         if (e->active)
@@ -2169,13 +2349,14 @@ static void updateThreatSprites(void)
         Helicopter *h = &helis[i];
         if (h->sprite == NULL)
         {
-            h->sprite = SPR_addSprite(&helicopter_sprite, h->x, h->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
+            const SpriteDefinition *heliDef = currentCity == CITY_LULE ? &reindeer_sprite : &helicopter_sprite;
+            h->sprite = SPR_addSprite(heliDef, h->x, h->y, TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
         }
         SPR_setVisibility(h->sprite, h->active ? VISIBLE : HIDDEN);
         if (h->active)
         {
             SPR_setFrame(h->sprite, (frame >> 2) & 3);
-            SPR_setHFlip(h->sprite, h->speed > 0);
+            SPR_setHFlip(h->sprite, currentCity == CITY_LULE ? h->speed < 0 : h->speed > 0);
             SPR_setPosition(h->sprite, h->x, h->y);
         }
     }
@@ -2393,10 +2574,11 @@ static void spawnHelicopter(void)
         {
             const bool fromRight = ((frame >> 8) & 1) != 0;
             helis[i].x = fromRight ? 320 : -32;
-            helis[i].y = 48 + ((frame >> 4) & 31);
+            helis[i].y = currentCity == CITY_LULE ? 42 + ((frame >> 3) & 39) : 48 + ((frame >> 4) & 31);
             helis[i].speed = fromRight ? -1 : 1;
+            if (currentCity == CITY_LULE) helis[i].speed *= 2;
             helis[i].stepTimer = 0;
-            helis[i].cooldown = 100;
+            helis[i].cooldown = currentCity == CITY_LULE ? 70 : 100;
             helis[i].burst = 0;
             helis[i].burstDelay = 0;
             helis[i].active = TRUE;
@@ -2635,6 +2817,11 @@ static void updateThreats(void)
         if ((frame & 127) == 32 || (frame & 255) == 160) spawnTank();
         if ((frame % 512) == 256) spawnHelicopter();
         if ((frame & (UMEA_EPA_MUSIC_FRAMES - 1)) == 0) playTone(96 + (((frame >> 5) & 3) * 18), 3);
+    }
+    else if (currentCity == CITY_LULE)
+    {
+        if ((frame % 96) == 0) spawnEnemy();
+        if ((frame % 360) == 120) spawnHelicopter();
     }
     else
     {
@@ -3059,6 +3246,11 @@ static void applyBuildingDamage(Building *b, u8 hitX, u8 hitY)
     const u8 mark = b->damage < MAX_DAMAGE_MARKS ? b->damage : MAX_DAMAGE_MARKS - 1;
 
     if (b->cracking || b->collapsing) return;
+    if (!luleCanDamageBuilding(b, hitX))
+    {
+        playTone(210, 3);
+        return;
+    }
 
     if (b->damage < buildingDamageLimit(b))
     {
@@ -3674,10 +3866,23 @@ static void updatePlayer(u16 joy, u16 pressed)
     }
 }
 
+static void drawLuleSnowfall(void)
+{
+    if (currentCity != CITY_LULE) return;
+
+    for (u8 i = 0; i < LULE_SNOWFLAKES; i++)
+    {
+        const u8 x = (u8)((i * 7 + (frame >> 2)) % SCREEN_TILES_W);
+        const u8 y = HUD_TILES_H + 1 + (u8)((i * 5 + (frame >> 3)) % (FLOOR_Y - HUD_TILES_H - 2));
+        VDP_setTileMapXY(BG_A, attr(PAL0, TILE_SNOW_DOT), x, y);
+    }
+}
+
 static void redrawPlayFrame(void)
 {
     VDP_fillTileMapRect(BG_A, 0, 0, 0, SCREEN_TILES_W, SCREEN_TILES_H);
     drawHud();
+    drawLuleSnowfall();
 
     if (currentCity == CITY_SUNDSVALL && playerInWater)
     {
