@@ -18,7 +18,10 @@ audio-test:
 	$(MAKE)
 
 audio-lab: audio-test
-	cargo run --manifest-path tools/audio/oxide_probe/Cargo.toml -- render-rom out/audio-test.bin --wav out/audio-test.wav --seconds 5
+	cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- render-rom out/audio-test.bin --wav out/audio-test.wav --report out/audio-test-report.json --seconds 5
+
+audio-lab-headless:
+	cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- test-rom --seconds 5
 
 .DEFAULT_GOAL := all
 

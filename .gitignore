@@ -12,4 +12,5 @@ __pycache__/
 *.pyc
 audio/converted/*
 !audio/converted/.gitkeep
+tools/audio/audio_lab/target/
 tools/audio/oxide_probe/target/

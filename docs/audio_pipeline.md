@@ -24,7 +24,8 @@ python tools/audio/md_audio_lab.py --gui
 python tools/audio/md_audio_lab.py path/to/song.mp3 --play
 make audio-test
 make audio-lab
-cargo run --manifest-path tools/audio/oxide_probe/Cargo.toml -- render-rom out/audio-test.bin --wav out/audio-test.wav --seconds 5
+cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- test-rom --seconds 5
+cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- render-rom out/audio-test.bin --wav out/audio-test.wav --report out/audio-test-report.json --seconds 5
 ```
 
 It writes a bundle:
@@ -81,7 +82,9 @@ FM/PSG/DAC intent rows.
 `src/vand_audio.c` is the first runtime side of this: it consumes the generated
 `VandAudioEvent` rows and writes YM2612 bass/lead plus PSG noise intent.
 
-The Rust lab under `tools/audio/oxide_probe` builds the `vandaler-audio-lab`
+The Rust lab under `tools/audio/audio_lab` builds the `vandaler-audio-lab`
 binary and uses the local `/home/nichlas/EutherOxide` Rust Mega Drive core as
 its first host backend. `render-rom` loads a ROM, runs frames, renders stereo
-i16 audio, writes a WAV, and can hand it to PipeWire with `--play`.
+i16 audio, writes a WAV and JSON report, and can hand it to PipeWire with
+`--play`. `test-rom` builds the SGDK audio test ROM first and then renders it
+headlessly through the same backend.
