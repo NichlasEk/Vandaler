@@ -2,6 +2,9 @@
 #include <psg.h>
 #include "resources.h"
 #include "stage_tiles.h"
+#ifdef VAND_AUDIO_TEST_ROM
+#include "audio_test.h"
+#endif
 
 #define SCREEN_TILES_W 40
 #define SCREEN_TILES_H 28
@@ -4084,6 +4087,9 @@ static void handleState(u16 joy)
 
 int main(bool hardReset)
 {
+#ifdef VAND_AUDIO_TEST_ROM
+    if (hardReset || !hardReset) return AudioTest_main();
+#endif
     SYS_disableInts();
     VDP_setScreenWidth320();
     VDP_setPlaneSize(64, 32, TRUE);
