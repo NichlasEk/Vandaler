@@ -14,5 +14,7 @@ audio/converted/*
 !audio/converted/.gitkeep
 tools/audio/audio_lab/target/
 tools/audio/oxide_probe/target/
+tools/audio/vand_ai_lism/src-tauri/target/
+tools/audio/vand_ai_lism/src-tauri/gen/
 src/generated_audio.c
 src/generated_audio.h

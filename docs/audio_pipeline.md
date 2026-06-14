@@ -25,8 +25,10 @@ python tools/audio/md_audio_lab.py path/to/song.mp3 --play
 make audio-test
 make audio-lab
 make audio-gui
+make audio-tauri
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- test-rom --seconds 5
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- gui
+cargo run --manifest-path tools/audio/vand_ai_lism/src-tauri/Cargo.toml
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- render-rom out/audio-test.bin --wav out/audio-test.wav --report out/audio-test-report.json --seconds 5
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-audio path/to/song.ogg --out audio/converted/song.vand-audio/arrangement.vand-audio.json
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-wav out/audio-test.wav --out out/audio-test-analysis.vand-audio.json
@@ -105,6 +107,10 @@ PipeWire, audition extracted DAC chunks, and build/render the SGDK audio test
 ROM. Use `out path/to/dir` to set the session output directory, or `a path/to/dir`
 to analyse once into a specific directory. This keeps the same headless backend
 while leaving room for a richer graphical front-end later.
+
+`make audio-tauri` starts the graphical Vand-AI-lism app. The Tauri front-end has
+file and output-folder pickers, calls the same Rust `analyse-audio` backend, and
+provides audio players for the original source and exported `dac_preview.wav`.
 
 `analyse-audio` is the first Rust-native import/transcription pass. It accepts
 direct 16-bit PCM WAV and can import MP3/OGG/FLAC/other ffmpeg-supported audio

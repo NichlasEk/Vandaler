@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vand-AI-lism</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>Vand-AI-lism</h1>
+            <p>Mega Drive audio transcription lab</p>
+          </div>
+          <button id="analyseBtn" class="primary" disabled>Analyse</button>
+        </header>
+
+        <section class="pickers">
+          <button id="openBtn">Open audio</button>
+          <div class="path">
+            <span>Source</span>
+            <strong id="sourcePath">No file selected</strong>
+          </div>
+          <button id="outputBtn">Output folder</button>
+          <div class="path">
+            <span>Output</span>
+            <strong id="outputPath">audio/converted</strong>
+          </div>
+        </section>
+
+        <section class="players">
+          <article>
+            <div class="panelTitle">
+              <span>Original</span>
+              <button id="loadOriginalBtn" disabled>Load</button>
+            </div>
+            <audio id="originalPlayer" controls></audio>
+          </article>
+          <article>
+            <div class="panelTitle">
+              <span>DAC Preview</span>
+              <button id="loadDacBtn" disabled>Load</button>
+            </div>
+            <audio id="dacPlayer" controls></audio>
+          </article>
+        </section>
+
+        <section class="stats">
+          <div><span>Frames</span><strong id="frames">-</strong></div>
+          <div><span>Active</span><strong id="activeFrames">-</strong></div>
+          <div><span>Runtime Events</span><strong id="runtimeEvents">-</strong></div>
+          <div><span>DAC Chunks</span><strong id="dacChunks">-</strong></div>
+        </section>
+
+        <section class="exports">
+          <h2>Exports</h2>
+          <div id="exportList" class="exportList">No analysis yet.</div>
+        </section>
+      </section>
+
+      <aside class="side">
+        <h2>Pipeline</h2>
+        <ol>
+          <li>Decode source to PCM</li>
+          <li>Track bass and lead notes</li>
+          <li>Detect transients and noise</li>
+          <li>Map FM, PSG and DAC intent</li>
+          <li>Export SGDK tables</li>
+        </ol>
+        <pre id="log">Ready.</pre>
+      </aside>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
