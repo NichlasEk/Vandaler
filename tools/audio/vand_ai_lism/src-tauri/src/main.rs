@@ -98,6 +98,8 @@ struct VandArrangement {
 
 #[derive(Deserialize)]
 struct VandArrangementFrame {
+    #[serde(default, rename = "class")]
+    class_name: String,
     #[serde(default)]
     bass_hz: f32,
     #[serde(default)]
@@ -330,11 +332,6 @@ fn fm_key_on(audio: &mut Audio, channel: usize, on: bool) {
     audio.ym2612.write_register(0, 0x28, value, Some(0), true);
 }
 
-fn amp_to_fm_attenuation(amp: f32) -> u8 {
-    let amp = amp.clamp(0.0, 1.0);
-    ((1.0 - amp) * 18.0).round().clamp(0.0, 28.0) as u8
-}
-
 fn amp_to_psg_volume(amp: f32) -> u8 {
     let amp = amp.clamp(0.0, 1.0);
     (15.0 - amp * 14.0).round().clamp(0.0, 15.0) as u8
@@ -380,12 +377,11 @@ fn render_instrument_samples(instrument: &VandInstrument) -> Vec<i16> {
         } else if instrument.chip == "sn76489" && frame == KEY_OFF_FRAME {
             psg_latch_volume(&mut audio, 0, 15);
         }
-        out.extend(
-            audio
-                .render_frame_samples(FRAME_SAMPLES, RATE as usize)
-                .into_iter()
-                .map(|sample| (sample.clamp(-1.0, 1.0) * 32767.0) as i16),
-        );
+        out.extend(render_preview_frame_i16(
+            &mut audio,
+            FRAME_SAMPLES,
+            RATE as usize,
+        ));
     }
     out
 }
@@ -409,6 +405,19 @@ fn normalize_preview_samples(samples: &mut [i16], target_peak: i16) {
         let value = (*sample as f32 * gain).round() as i32;
         *sample = value.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
     }
+}
+
+fn render_preview_frame_i16(
+    audio: &mut Audio,
+    frame_samples: usize,
+    sample_rate: usize,
+) -> Vec<i16> {
+    audio.ym2612.tick(audio.ym_frame_cycles.round() as i64);
+    audio
+        .render_frame_samples(frame_samples, sample_rate)
+        .into_iter()
+        .map(|sample| (sample.clamp(-1.0, 1.0) * 32767.0) as i16)
+        .collect()
 }
 
 fn ym2612_pitch_for_hz(hz: f32) -> (u16, u8) {
@@ -512,21 +521,9 @@ fn render_arrangement_samples(
             if bass_id != next_bass_id {
                 bass_id = next_bass_id.to_string();
                 if let Some(instrument) = instruments.get(&bass_id) {
-                    write_fm_patch(
-                        &mut audio,
-                        instrument,
-                        0,
-                        amp_to_fm_attenuation(frame.bass_amp),
-                    );
+                    write_fm_patch(&mut audio, instrument, 0, 0);
                 }
                 bass_on = false;
-            } else if let Some(instrument) = instruments.get(&bass_id) {
-                write_fm_patch(
-                    &mut audio,
-                    instrument,
-                    0,
-                    amp_to_fm_attenuation(frame.bass_amp),
-                );
             }
             write_fm_pitch(&mut audio, 0, frame.bass_hz);
             if !bass_on {
@@ -547,21 +544,9 @@ fn render_arrangement_samples(
             if lead_id != next_lead_id {
                 lead_id = next_lead_id.to_string();
                 if let Some(instrument) = instruments.get(&lead_id) {
-                    write_fm_patch(
-                        &mut audio,
-                        instrument,
-                        1,
-                        amp_to_fm_attenuation(frame.lead_amp),
-                    );
+                    write_fm_patch(&mut audio, instrument, 1, 0);
                 }
                 lead_on = false;
-            } else if let Some(instrument) = instruments.get(&lead_id) {
-                write_fm_patch(
-                    &mut audio,
-                    instrument,
-                    1,
-                    amp_to_fm_attenuation(frame.lead_amp),
-                );
             }
             write_fm_pitch(&mut audio, 1, frame.lead_hz);
             if !lead_on {
@@ -579,18 +564,18 @@ fn render_arrangement_samples(
         } else {
             &frame.noise_instrument_id
         };
-        if instruments.contains_key(noise_id) && noise_amp > 0.015 {
+        let use_noise = matches!(frame.class_name.as_str(), "drum" | "sample");
+        if use_noise && instruments.contains_key(noise_id) && noise_amp > 0.12 {
             psg_set_noise(&mut audio, noise_amp);
         } else {
             psg_latch_volume(&mut audio, 3, 15);
         }
 
-        out.extend(
-            audio
-                .render_frame_samples(frame_samples, RATE as usize)
-                .into_iter()
-                .map(|sample| (sample.clamp(-1.0, 1.0) * 32767.0) as i16),
-        );
+        out.extend(render_preview_frame_i16(
+            &mut audio,
+            frame_samples,
+            RATE as usize,
+        ));
     }
 
     if bass_on {
@@ -828,6 +813,7 @@ mod tests {
             instrument_bank: DEFAULT_INSTRUMENT_BANK.to_string(),
             events: vec![
                 VandArrangementFrame {
+                    class_name: "bass".to_string(),
                     bass_hz: 110.0,
                     bass_amp: 0.8,
                     bass_instrument_id: DEFAULT_BASS_INSTRUMENT.to_string(),
@@ -839,6 +825,7 @@ mod tests {
                     noise_instrument_id: String::new(),
                 },
                 VandArrangementFrame {
+                    class_name: "drum".to_string(),
                     bass_hz: 123.47,
                     bass_amp: 0.7,
                     bass_instrument_id: DEFAULT_BASS_INSTRUMENT.to_string(),
