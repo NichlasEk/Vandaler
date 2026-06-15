@@ -112,7 +112,8 @@ li {
 .path,
 .exports,
 .stats div,
-.players article {
+.players article,
+.instrumentBank {
   border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 8px;
   background: #171c26;
@@ -139,9 +140,87 @@ li {
   font-size: 14px;
 }
 
-.players {
+.instrumentBank {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 280px;
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 16px;
+  padding: 14px;
+}
+
+.bankActions {
+  display: grid;
+  gap: 8px;
+}
+
+.bankMeta {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.bankMeta div {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 6px;
+  padding: 9px 10px;
+  background: #111721;
+}
+
+.bankMeta span {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.bankMeta strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instrumentList {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+  max-height: 190px;
+  overflow: auto;
+  padding-top: 4px;
+  color: #d9dfec;
+}
+
+.instrumentRow {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 10px;
+  text-align: left;
+  background: #111721;
+}
+
+.instrumentRow.active {
+  border-color: #f1b24a;
+  background: #2d2530;
+}
+
+.instrumentRow strong,
+.instrumentRow span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instrumentRow span {
+  font-size: 12px;
+}
+
+.players {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 16px;
 }
@@ -212,6 +291,7 @@ pre {
 
 @media (max-width: 900px) {
   .shell,
+  .instrumentBank,
   .players,
   .stats {
     grid-template-columns: 1fr;

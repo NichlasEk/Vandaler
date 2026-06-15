@@ -30,6 +30,22 @@
           </div>
         </section>
 
+        <section class="instrumentBank">
+          <div class="bankActions">
+            <button id="openBankBtn">Open bank</button>
+            <button id="importBankBtn">Import instruments</button>
+          </div>
+          <div class="path">
+            <span>Instrument bank</span>
+            <strong id="bankPath">No bank selected</strong>
+          </div>
+          <div class="bankMeta">
+            <div><span>Instruments</span><strong id="bankCount">-</strong></div>
+            <div><span>Review</span><strong id="bankReview">-</strong></div>
+          </div>
+          <div id="instrumentList" class="instrumentList">No instruments loaded.</div>
+        </section>
+
         <section class="players">
           <article>
             <div class="panelTitle">
@@ -44,6 +60,13 @@
               <button id="loadDacBtn" disabled>Load</button>
             </div>
             <audio id="dacPlayer" controls></audio>
+          </article>
+          <article>
+            <div class="panelTitle">
+              <span>Instrument</span>
+              <button id="previewInstrumentBtn" disabled>Preview</button>
+            </div>
+            <audio id="instrumentPlayer" controls></audio>
           </article>
         </section>
 
