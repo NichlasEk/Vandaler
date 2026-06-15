@@ -7,6 +7,7 @@ const state = {
   bank: null,
   bankPath: "",
   selectedInstrument: null,
+  busyCount: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -15,10 +16,19 @@ function setLog(message) {
   $("log").textContent = message;
 }
 
+function paint() {
+  return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+}
+
 function setBusy(progressId, buttonId, busy, label) {
   const progress = $(progressId);
   const button = $(buttonId);
+  const globalBusy = $("globalBusy");
+  const globalBusyLabel = $("globalBusyLabel");
   if (progress) progress.hidden = !busy;
+  state.busyCount = Math.max(0, state.busyCount + (busy ? 1 : -1));
+  if (globalBusy) globalBusy.hidden = state.busyCount === 0;
+  if (globalBusyLabel && busy) globalBusyLabel.textContent = label || "Working...";
   if (!button) return;
   if (busy) {
     button.dataset.idleLabel = button.textContent;
@@ -132,6 +142,7 @@ async function previewInstrument() {
   setBusy("instrumentProgress", "previewInstrumentBtn", true, "Rendering...");
   setLog(`Rendering instrument preview...\n${instrument.file}`);
   try {
+    await paint();
     player.src = await invoke("instrument_preview_data_url", { path: instrument.file });
     await player.play();
     setLog(`Playing instrument preview:\n${instrument.name}\n${instrument.file}`);
@@ -201,6 +212,7 @@ async function analyse() {
   setBusy("analysisProgress", "analyseBtn", true, "Analysing...");
   setLog("Analysing...");
   try {
+    await paint();
     const result = await invoke("analyse_audio", {
       input: state.source,
       outputDir: state.output,
@@ -221,6 +233,7 @@ async function loadPlayer(playerId, path, label, progressId = "", buttonId = "")
   if (progressId && buttonId) setBusy(progressId, buttonId, true, "Loading...");
   setLog(`Loading ${label}...\n${path}`);
   try {
+    await paint();
     player.src = await invoke("audio_data_url", { path });
     await player.play();
     setLog(`Playing ${label}:\n${path}`);
@@ -250,6 +263,7 @@ async function loadArrangement() {
   setBusy("arrangementProgress", "loadArrangementBtn", true, "Rendering...");
   setLog(`Rendering arrangement preview...\n${state.summary.arrangement}`);
   try {
+    await paint();
     player.src = await invoke("arrangement_preview_data_url", {
       path: state.summary.arrangement,
       bankPath: state.bankPath || "",
@@ -270,6 +284,7 @@ async function loadNote() {
   setBusy("noteProgress", "loadNoteBtn", true, "Rendering...");
   setLog(`Rendering note preview...\n${state.summary.note_arrangement}`);
   try {
+    await paint();
     player.src = await invoke("note_preview_data_url", {
       path: state.summary.note_arrangement,
       bankPath: state.bankPath || "",
