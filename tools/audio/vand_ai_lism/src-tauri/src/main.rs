@@ -19,6 +19,7 @@ struct AnalysisSummary {
     runtime_events: u32,
     dac_chunks: u32,
     arrangement: String,
+    note_arrangement: String,
     bundle_dir: String,
     import_metadata: String,
     dac_preview: String,
@@ -118,6 +119,39 @@ struct VandArrangementFrame {
     transient: f32,
     #[serde(default)]
     noise_instrument_id: String,
+}
+
+#[derive(Deserialize)]
+struct VandNoteArrangement {
+    #[serde(default = "default_sample_rate")]
+    sample_rate: u32,
+    #[serde(default = "default_arrangement_hop")]
+    hop: usize,
+    #[serde(default)]
+    total_frames: usize,
+    #[serde(default)]
+    instrument_bank: String,
+    notes: Vec<VandNoteEvent>,
+    #[serde(default)]
+    drums: Vec<VandDrumEvent>,
+}
+
+#[derive(Clone, Deserialize)]
+struct VandNoteEvent {
+    track: String,
+    start_frame: usize,
+    frames: usize,
+    hz: f32,
+    velocity: f32,
+    instrument_id: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct VandDrumEvent {
+    start_frame: usize,
+    velocity: f32,
+    noise_amp: f32,
+    instrument_id: String,
 }
 
 fn default_sample_rate() -> u32 {
@@ -468,10 +502,39 @@ fn load_instrument_bank_for_arrangement(
     explicit_bank_path: &str,
 ) -> Result<HashMap<String, VandInstrument>, String> {
     let arrangement_dir = arrangement_path.parent().unwrap_or_else(|| Path::new("."));
+    load_instrument_bank_from_reference(
+        repo,
+        arrangement_dir,
+        &arrangement.instrument_bank,
+        explicit_bank_path,
+    )
+}
+
+fn load_instrument_bank_for_note_arrangement(
+    repo: &Path,
+    arrangement_path: &Path,
+    arrangement: &VandNoteArrangement,
+    explicit_bank_path: &str,
+) -> Result<HashMap<String, VandInstrument>, String> {
+    let arrangement_dir = arrangement_path.parent().unwrap_or_else(|| Path::new("."));
+    load_instrument_bank_from_reference(
+        repo,
+        arrangement_dir,
+        &arrangement.instrument_bank,
+        explicit_bank_path,
+    )
+}
+
+fn load_instrument_bank_from_reference(
+    repo: &Path,
+    arrangement_dir: &Path,
+    instrument_bank: &str,
+    explicit_bank_path: &str,
+) -> Result<HashMap<String, VandInstrument>, String> {
     let bank_path = if !explicit_bank_path.is_empty() {
         PathBuf::from(explicit_bank_path)
-    } else if !arrangement.instrument_bank.is_empty() {
-        resolve_existing_path(repo, arrangement_dir, &arrangement.instrument_bank)
+    } else if !instrument_bank.is_empty() {
+        resolve_existing_path(repo, arrangement_dir, instrument_bank)
     } else {
         repo.join(DEFAULT_INSTRUMENT_BANK)
     };
@@ -488,15 +551,18 @@ fn load_instrument_bank_for_arrangement(
     Ok(instruments)
 }
 
+fn frame_sample_count(source_rate: u32, hop: usize) -> usize {
+    const RATE: u32 = 44_100;
+    ((hop as u64 * RATE as u64 + (source_rate / 2) as u64) / source_rate.max(1) as u64).max(64)
+        as usize
+}
+
 fn render_arrangement_samples(
     arrangement: &VandArrangement,
     instruments: &HashMap<String, VandInstrument>,
 ) -> Vec<i16> {
     const RATE: u32 = 44_100;
-    let frame_samples = ((arrangement.hop as u64 * RATE as u64
-        + (arrangement.sample_rate / 2) as u64)
-        / arrangement.sample_rate.max(1) as u64)
-        .max(64) as usize;
+    let frame_samples = frame_sample_count(arrangement.sample_rate, arrangement.hop);
     let mut audio = Audio::new();
     audio.reset();
     audio.ym2612.write_register(0, 0x22, 0x00, None, true);
@@ -583,6 +649,125 @@ fn render_arrangement_samples(
     }
     if lead_on {
         fm_key_on(&mut audio, 1, false);
+    }
+
+    out
+}
+
+fn render_note_arrangement_samples(
+    arrangement: &VandNoteArrangement,
+    instruments: &HashMap<String, VandInstrument>,
+) -> Vec<i16> {
+    const RATE: u32 = 44_100;
+    let frame_samples = frame_sample_count(arrangement.sample_rate, arrangement.hop);
+    let mut audio = Audio::new();
+    audio.reset();
+    audio.ym2612.write_register(0, 0x22, 0x00, None, true);
+    audio.ym2612.write_register(0, 0x27, 0x00, None, true);
+    psg_latch_volume(&mut audio, 3, 15);
+
+    let mut notes = arrangement.notes.clone();
+    notes.sort_by_key(|note| note.start_frame);
+    let mut drums = arrangement.drums.clone();
+    drums.sort_by_key(|drum| drum.start_frame);
+
+    let inferred_frames = notes
+        .iter()
+        .map(|note| note.start_frame.saturating_add(note.frames))
+        .chain(drums.iter().map(|drum| drum.start_frame.saturating_add(3)))
+        .max()
+        .unwrap_or(0);
+    let total_frames = arrangement.total_frames.max(inferred_frames).max(1);
+    let mut out = Vec::with_capacity(total_frames * frame_samples);
+    let mut note_index = 0usize;
+    let mut drum_index = 0usize;
+    let mut bass_id = String::new();
+    let mut lead_id = String::new();
+    let mut bass_end = 0usize;
+    let mut lead_end = 0usize;
+    let mut bass_on = false;
+    let mut lead_on = false;
+    let mut noise_until = 0usize;
+    let mut noise_amp = 0.0f32;
+
+    for frame in 0..total_frames {
+        audio.begin_frame();
+
+        while note_index < notes.len() && notes[note_index].start_frame == frame {
+            let note = &notes[note_index];
+            let (channel, current_id, active, end_frame, fallback) = if note.track == "bass" {
+                (
+                    0usize,
+                    &mut bass_id,
+                    &mut bass_on,
+                    &mut bass_end,
+                    DEFAULT_BASS_INSTRUMENT,
+                )
+            } else {
+                (
+                    1usize,
+                    &mut lead_id,
+                    &mut lead_on,
+                    &mut lead_end,
+                    DEFAULT_LEAD_INSTRUMENT,
+                )
+            };
+            let next_id = if note.instrument_id.is_empty() {
+                fallback
+            } else {
+                &note.instrument_id
+            };
+            if current_id.as_str() != next_id {
+                *current_id = next_id.to_string();
+                if let Some(instrument) = instruments.get(current_id.as_str()) {
+                    let attenuation = ((1.0 - note.velocity.clamp(0.0, 1.0)) * 22.0) as u8;
+                    write_fm_patch(&mut audio, instrument, channel, attenuation);
+                }
+                if *active {
+                    fm_key_on(&mut audio, channel, false);
+                    *active = false;
+                }
+            }
+            write_fm_pitch(&mut audio, channel, note.hz);
+            fm_key_on(&mut audio, channel, true);
+            *active = true;
+            *end_frame = note.start_frame.saturating_add(note.frames);
+            note_index += 1;
+        }
+
+        if bass_on && frame >= bass_end {
+            fm_key_on(&mut audio, 0, false);
+            bass_on = false;
+        }
+        if lead_on && frame >= lead_end {
+            fm_key_on(&mut audio, 1, false);
+            lead_on = false;
+        }
+
+        while drum_index < drums.len() && drums[drum_index].start_frame == frame {
+            let drum = &drums[drum_index];
+            let id = if drum.instrument_id.is_empty() {
+                DEFAULT_NOISE_INSTRUMENT
+            } else {
+                &drum.instrument_id
+            };
+            if instruments.contains_key(id) {
+                noise_amp = drum.noise_amp.max(drum.velocity * 0.65).clamp(0.0, 1.0);
+                noise_until = frame.saturating_add(3);
+            }
+            drum_index += 1;
+        }
+        if frame < noise_until && noise_amp > 0.05 {
+            psg_set_noise(&mut audio, noise_amp);
+        } else {
+            psg_latch_volume(&mut audio, 3, 15);
+        }
+
+        out.extend(render_preview_frame_i16(
+            &mut audio,
+            frame_samples,
+            RATE as usize,
+        ));
     }
 
     out
@@ -688,6 +873,10 @@ fn analyse_audio(input: String, output_dir: String) -> Result<AnalysisResult, St
         runtime_events: parse_metric(&log, "runtime events,"),
         dac_chunks: parse_metric(&log, "dac chunks"),
         arrangement: output_path.display().to_string(),
+        note_arrangement: bundle_dir
+            .join("note_arrangement.vand-audio.json")
+            .display()
+            .to_string(),
         import_metadata: bundle_dir.join("import.json").display().to_string(),
         dac_preview: bundle_dir.join("dac_preview.wav").display().to_string(),
         bundle_dir: bundle_dir.display().to_string(),
@@ -781,6 +970,29 @@ fn arrangement_preview_data_url(path: String, bank_path: String) -> Result<Strin
     Ok(format!("data:audio/wav;base64,{}", base64_encode(&bytes)))
 }
 
+#[tauri::command]
+fn note_preview_data_url(path: String, bank_path: String) -> Result<String, String> {
+    let repo = repo_root()?;
+    let arrangement_path = PathBuf::from(path);
+    let text = fs::read_to_string(&arrangement_path)
+        .map_err(|err| format!("failed to read {}: {err}", arrangement_path.display()))?;
+    let arrangement: VandNoteArrangement = serde_json::from_str(&text)
+        .map_err(|err| format!("invalid note arrangement JSON: {err}"))?;
+    let instruments = load_instrument_bank_for_note_arrangement(
+        &repo,
+        &arrangement_path,
+        &arrangement,
+        &bank_path,
+    )?;
+    let mut samples = render_note_arrangement_samples(&arrangement, &instruments);
+    normalize_preview_samples(&mut samples, 22_000);
+    let preview = std::env::temp_dir().join("vand-ai-lism-note-preview.wav");
+    write_preview_wav(&preview, 44_100, &samples)?;
+    let bytes =
+        fs::read(&preview).map_err(|err| format!("failed to read {}: {err}", preview.display()))?;
+    Ok(format!("data:audio/wav;base64,{}", base64_encode(&bytes)))
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -793,7 +1005,8 @@ fn main() {
             import_instrument_dir,
             audio_data_url,
             instrument_preview_data_url,
-            arrangement_preview_data_url
+            arrangement_preview_data_url,
+            note_preview_data_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vand-AI-lism");
@@ -851,5 +1064,54 @@ mod tests {
             .max()
             .unwrap_or(0);
         assert!(peak >= 18_000, "preview peak too low: {peak}");
+    }
+
+    #[test]
+    fn renders_note_preview_with_core_bank() {
+        let repo = repo_root().expect("repo root");
+        let arrangement_path = repo.join("audio/converted/test-note-arrangement.vand-audio.json");
+        let arrangement = VandNoteArrangement {
+            sample_rate: 44_100,
+            hop: 512,
+            total_frames: 96,
+            instrument_bank: DEFAULT_INSTRUMENT_BANK.to_string(),
+            notes: vec![
+                VandNoteEvent {
+                    track: "bass".to_string(),
+                    start_frame: 0,
+                    frames: 48,
+                    hz: 110.0,
+                    velocity: 0.8,
+                    instrument_id: DEFAULT_BASS_INSTRUMENT.to_string(),
+                },
+                VandNoteEvent {
+                    track: "lead".to_string(),
+                    start_frame: 16,
+                    frames: 32,
+                    hz: 220.0,
+                    velocity: 0.7,
+                    instrument_id: DEFAULT_LEAD_INSTRUMENT.to_string(),
+                },
+            ],
+            drums: vec![VandDrumEvent {
+                start_frame: 24,
+                velocity: 0.8,
+                noise_amp: 0.5,
+                instrument_id: DEFAULT_NOISE_INSTRUMENT.to_string(),
+            }],
+        };
+        let instruments =
+            load_instrument_bank_for_note_arrangement(&repo, &arrangement_path, &arrangement, "")
+                .expect("core bank");
+        let mut samples = render_note_arrangement_samples(&arrangement, &instruments);
+        assert!(!samples.is_empty());
+        assert!(samples.iter().any(|sample| *sample != 0));
+        normalize_preview_samples(&mut samples, 22_000);
+        let peak = samples
+            .iter()
+            .map(|sample| i32::from(*sample).abs())
+            .max()
+            .unwrap_or(0);
+        assert!(peak >= 18_000, "note preview peak too low: {peak}");
     }
 }

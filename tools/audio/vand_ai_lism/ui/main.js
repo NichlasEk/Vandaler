@@ -35,6 +35,7 @@ function setSummary(summary) {
   $("dacChunks").textContent = summary ? summary.dac_chunks : "-";
   $("loadDacBtn").disabled = !summary?.dac_preview;
   $("loadArrangementBtn").disabled = !summary?.arrangement;
+  $("loadNoteBtn").disabled = !summary?.note_arrangement;
 
   if (!summary) {
     $("exportList").textContent = "No analysis yet.";
@@ -45,6 +46,7 @@ function setSummary(summary) {
   for (const [label, value] of [
     ["Bundle", summary.bundle_dir],
     ["Arrangement", summary.arrangement],
+    ["Note Arrangement", summary.note_arrangement],
     ["Import", summary.import_metadata],
     ["DAC Preview", summary.dac_preview],
   ]) {
@@ -227,6 +229,22 @@ async function loadArrangement() {
   }
 }
 
+async function loadNote() {
+  if (!state.summary?.note_arrangement) return;
+  const player = $("notePlayer");
+  setLog(`Rendering note preview...\n${state.summary.note_arrangement}`);
+  try {
+    player.src = await invoke("note_preview_data_url", {
+      path: state.summary.note_arrangement,
+      bankPath: state.bankPath || "",
+    });
+    await player.play();
+    setLog(`Playing note preview:\n${state.summary.note_arrangement}`);
+  } catch (err) {
+    setLog(`Note preview failed:\n${err}`);
+  }
+}
+
 $("openBtn").addEventListener("click", chooseAudio);
 $("outputBtn").addEventListener("click", chooseOutput);
 $("openBankBtn").addEventListener("click", openBank);
@@ -235,6 +253,7 @@ $("analyseBtn").addEventListener("click", analyse);
 $("loadOriginalBtn").addEventListener("click", loadOriginal);
 $("loadDacBtn").addEventListener("click", loadDac);
 $("loadArrangementBtn").addEventListener("click", loadArrangement);
+$("loadNoteBtn").addEventListener("click", loadNote);
 $("previewInstrumentBtn").addEventListener("click", previewInstrument);
 
 setOutput(state.output);

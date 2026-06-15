@@ -429,9 +429,29 @@ struct AnalysisSummary {
     runtime_events: usize,
     dac_chunks: usize,
     arrangement: PathBuf,
+    note_arrangement: PathBuf,
     bundle_dir: PathBuf,
     import_metadata: PathBuf,
     dac_preview: PathBuf,
+}
+
+#[derive(Clone)]
+struct NoteEvent {
+    track: &'static str,
+    start_frame: usize,
+    frames: usize,
+    midi: i32,
+    hz: f32,
+    velocity: f32,
+    instrument_id: &'static str,
+}
+
+struct DrumEvent {
+    start_frame: usize,
+    kind: &'static str,
+    velocity: f32,
+    noise_amp: f32,
+    instrument_id: &'static str,
 }
 
 fn read_u16_le(bytes: &[u8]) -> u16 {
@@ -1299,11 +1319,22 @@ fn midi_to_hz(midi: i32) -> f32 {
     440.0 * 2.0f32.powf((midi as f32 - 69.0) / 12.0)
 }
 
+fn hz_to_midi(hz: f32) -> Option<i32> {
+    if hz <= 0.0 || !hz.is_finite() {
+        return None;
+    }
+    Some((69.0 + 12.0 * (hz / 440.0).log2()).round() as i32)
+}
+
 fn note_name(hz: f32) -> String {
     if hz <= 0.0 {
         return "---".to_string();
     }
-    let midi = (69.0 + 12.0 * (hz / 440.0).log2()).round() as i32;
+    let midi = hz_to_midi(hz).unwrap_or(0);
+    note_name_from_midi(midi)
+}
+
+fn note_name_from_midi(midi: i32) -> String {
     let names = [
         "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
     ];
@@ -2071,6 +2102,278 @@ fn write_analysis_json(
     std::fs::write(path, out)
 }
 
+fn stable_midi_candidates(
+    frames: &[AnalysisFrame],
+    track: &'static str,
+    min_midi: i32,
+    max_midi: i32,
+) -> Vec<Option<(i32, f32)>> {
+    let mut raw = Vec::with_capacity(frames.len());
+    for frame in frames {
+        let (hz, amp, threshold) = if track == "bass" {
+            (frame.bass_hz, frame.bass_amp, 0.015)
+        } else {
+            (frame.lead_hz, frame.lead_amp, 0.012)
+        };
+        let midi = hz_to_midi(hz).map(|midi| midi.clamp(min_midi, max_midi));
+        raw.push(midi.filter(|_| amp >= threshold).map(|midi| (midi, amp)));
+    }
+
+    let mut stable = Vec::with_capacity(raw.len());
+    let mut current: Option<i32> = None;
+    let mut pending: Option<i32> = None;
+    let mut pending_count = 0usize;
+
+    for candidate in raw {
+        let Some((midi, amp)) = candidate else {
+            pending = None;
+            pending_count = 0;
+            current = None;
+            stable.push(None);
+            continue;
+        };
+
+        if current.is_none_or(|locked| (locked - midi).abs() <= 1) {
+            current = Some(midi);
+            pending = None;
+            pending_count = 0;
+            stable.push(Some((midi, amp)));
+            continue;
+        }
+
+        if pending == Some(midi) {
+            pending_count += 1;
+        } else {
+            pending = Some(midi);
+            pending_count = 1;
+        }
+
+        if pending_count >= 3 {
+            current = Some(midi);
+            stable.push(Some((midi, amp)));
+        } else if let Some(locked) = current {
+            stable.push(Some((locked, amp * 0.85)));
+        } else {
+            stable.push(None);
+        }
+    }
+
+    stable
+}
+
+fn build_note_events_for_track(
+    frames: &[AnalysisFrame],
+    track: &'static str,
+    min_midi: i32,
+    max_midi: i32,
+    instrument_id: &'static str,
+) -> Vec<NoteEvent> {
+    const MIN_NOTE_FRAMES: usize = 4;
+    const MAX_BRIDGE_GAP: usize = 2;
+    let candidates = stable_midi_candidates(frames, track, min_midi, max_midi);
+    let mut notes = Vec::new();
+    let mut start = 0usize;
+    let mut active_midi: Option<i32> = None;
+    let mut velocity_sum = 0.0;
+    let mut velocity_count = 0usize;
+    let mut gap = 0usize;
+
+    let finish_note = |notes: &mut Vec<NoteEvent>,
+                       start: usize,
+                       end: usize,
+                       midi: i32,
+                       velocity_sum: f32,
+                       velocity_count: usize| {
+        let frames_len = end.saturating_sub(start);
+        if frames_len >= MIN_NOTE_FRAMES && velocity_count > 0 {
+            notes.push(NoteEvent {
+                track,
+                start_frame: start,
+                frames: frames_len,
+                midi,
+                hz: midi_to_hz(midi),
+                velocity: (velocity_sum / velocity_count as f32).clamp(0.05, 1.0),
+                instrument_id,
+            });
+        }
+    };
+
+    for (index, candidate) in candidates.iter().enumerate() {
+        match (active_midi, candidate) {
+            (None, Some((midi, amp))) => {
+                active_midi = Some(*midi);
+                start = index;
+                velocity_sum = *amp;
+                velocity_count = 1;
+                gap = 0;
+            }
+            (Some(midi), Some((next_midi, amp))) if midi == *next_midi => {
+                velocity_sum += *amp;
+                velocity_count += 1;
+                gap = 0;
+            }
+            (Some(midi), Some((next_midi, amp))) => {
+                finish_note(
+                    &mut notes,
+                    start,
+                    index.saturating_sub(gap),
+                    midi,
+                    velocity_sum,
+                    velocity_count,
+                );
+                active_midi = Some(*next_midi);
+                start = index;
+                velocity_sum = *amp;
+                velocity_count = 1;
+                gap = 0;
+            }
+            (Some(midi), None) => {
+                gap += 1;
+                if gap <= MAX_BRIDGE_GAP {
+                    continue;
+                }
+                finish_note(
+                    &mut notes,
+                    start,
+                    index + 1 - gap,
+                    midi,
+                    velocity_sum,
+                    velocity_count,
+                );
+                active_midi = None;
+                velocity_sum = 0.0;
+                velocity_count = 0;
+                gap = 0;
+            }
+            (None, None) => {}
+        }
+    }
+
+    if let Some(midi) = active_midi {
+        finish_note(
+            &mut notes,
+            start,
+            candidates.len().saturating_sub(gap),
+            midi,
+            velocity_sum,
+            velocity_count,
+        );
+    }
+
+    notes
+}
+
+fn build_drum_events(frames: &[AnalysisFrame]) -> Vec<DrumEvent> {
+    let mut drums = Vec::new();
+    let mut last_frame = 0usize;
+
+    for frame in frames {
+        let noise_hit = matches!(frame.class_name, "drum" | "sample")
+            && frame.transient > 0.18
+            && frame.noise_amp > 0.06;
+        let transient_hit = frame.transient > 0.72 && frame.rms > 0.04;
+        let clear_drum = noise_hit || transient_hit;
+        if clear_drum && frame.index.saturating_sub(last_frame) > 6 {
+            drums.push(DrumEvent {
+                start_frame: frame.index,
+                kind: if frame.rms > 0.18 {
+                    "kick"
+                } else if noise_hit {
+                    "noise_hit"
+                } else {
+                    "transient_hit"
+                },
+                velocity: frame.transient.clamp(0.1, 1.0),
+                noise_amp: frame.noise_amp.max(frame.transient * 0.35).clamp(0.0, 1.0),
+                instrument_id: DEFAULT_NOISE_INSTRUMENT,
+            });
+            last_frame = frame.index;
+        }
+    }
+
+    drums
+}
+
+fn write_note_arrangement_json(
+    path: &Path,
+    input: &Path,
+    wav: &WavData,
+    frames: &[AnalysisFrame],
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let bass_notes = build_note_events_for_track(frames, "bass", 24, 55, DEFAULT_BASS_INSTRUMENT);
+    let lead_notes = build_note_events_for_track(frames, "lead", 48, 84, DEFAULT_LEAD_INSTRUMENT);
+    let drum_events = build_drum_events(frames);
+    let duration = wav.samples.len() as f32 / wav.sample_rate as f32;
+    let mut out = String::new();
+    out.push_str("{\n");
+    out.push_str("  \"format\": \"vandaler-vand-note-arrangement-v0\",\n");
+    out.push_str(&format!(
+        "  \"source\": \"{}\",\n",
+        json_escape(&input.display().to_string())
+    ));
+    out.push_str(&format!("  \"sample_rate\": {},\n", wav.sample_rate));
+    out.push_str(&format!("  \"duration\": {:.6},\n", duration));
+    out.push_str(&format!("  \"hop\": {},\n", ANALYSIS_HOP));
+    out.push_str(&format!("  \"total_frames\": {},\n", frames.len()));
+    out.push_str(&format!(
+        "  \"instrument_bank\": \"{}\",\n",
+        DEFAULT_INSTRUMENT_BANK
+    ));
+    out.push_str("  \"pipeline\": [\"frame_analysis\", \"semitone_quantize\", \"pitch_hysteresis\", \"short_note_filter\", \"drum_gate\"],\n");
+
+    out.push_str("  \"notes\": [\n");
+    let total_notes = bass_notes.len() + lead_notes.len();
+    let mut note_index = 0usize;
+    for note in bass_notes.iter().chain(lead_notes.iter()) {
+        note_index += 1;
+        let comma = if note_index == total_notes { "" } else { "," };
+        out.push_str(&format!(
+            concat!(
+                "    {{\"track\": \"{}\", \"start_frame\": {}, \"frames\": {}, ",
+                "\"t\": {:.6}, \"duration\": {:.6}, \"midi\": {}, \"hz\": {:.3}, ",
+                "\"note\": \"{}\", \"velocity\": {:.5}, \"instrument_id\": \"{}\"}}{}\n"
+            ),
+            note.track,
+            note.start_frame,
+            note.frames,
+            note.start_frame as f32 * ANALYSIS_HOP as f32 / wav.sample_rate as f32,
+            note.frames as f32 * ANALYSIS_HOP as f32 / wav.sample_rate as f32,
+            note.midi,
+            note.hz,
+            note_name_from_midi(note.midi),
+            note.velocity,
+            note.instrument_id,
+            comma,
+        ));
+    }
+    out.push_str("  ],\n");
+
+    out.push_str("  \"drums\": [\n");
+    for (i, drum) in drum_events.iter().enumerate() {
+        let comma = if i + 1 == drum_events.len() { "" } else { "," };
+        out.push_str(&format!(
+            concat!(
+                "    {{\"start_frame\": {}, \"t\": {:.6}, \"kind\": \"{}\", ",
+                "\"velocity\": {:.5}, \"noise_amp\": {:.5}, \"instrument_id\": \"{}\"}}{}\n"
+            ),
+            drum.start_frame,
+            drum.start_frame as f32 * ANALYSIS_HOP as f32 / wav.sample_rate as f32,
+            drum.kind,
+            drum.velocity,
+            drum.noise_amp,
+            drum.instrument_id,
+            comma,
+        ));
+    }
+    out.push_str("  ]\n");
+    out.push_str("}\n");
+    std::fs::write(path, out)
+}
+
 fn analyse_input(
     input: &Path,
     out: Option<PathBuf>,
@@ -2083,9 +2386,11 @@ fn analyse_input(
     let dac_chunks = extract_dac_chunks(&bundle_dir, &imported.wav, &frames)?;
     let runtime_events = build_runtime_events(&frames, imported.wav.sample_rate, &dac_chunks);
     let import_metadata = bundle_dir.join("import.json");
+    let note_arrangement = bundle_dir.join("note_arrangement.vand-audio.json");
     let dac_preview = write_dac_preview_wav(&bundle_dir, &dac_chunks)?;
     write_import_metadata(&import_metadata, input, &imported)?;
     write_analysis_json(&out, input, &imported.wav, &frames)?;
+    write_note_arrangement_json(&note_arrangement, input, &imported.wav, &frames)?;
     write_split_tracks(&bundle_dir, input, &frames)?;
     write_dac_chunks_json(
         &bundle_dir.join("dac_chunks.json"),
@@ -2122,6 +2427,7 @@ fn analyse_input(
         runtime_events: runtime_events.len(),
         dac_chunks: dac_chunks.len(),
         arrangement: out,
+        note_arrangement,
         bundle_dir,
         import_metadata,
         dac_preview,
@@ -2135,13 +2441,14 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing audio path"))?;
     let summary = analyse_input(input, args.out.clone(), args.install_sgdk)?;
     println!(
-        "analysed {} | {} frames, {} active, {} runtime events, {} dac chunks | wrote {}",
+        "analysed {} | {} frames, {} active, {} runtime events, {} dac chunks | wrote {} | note {}",
         input.display(),
         summary.frames,
         summary.active_frames,
         summary.runtime_events,
         summary.dac_chunks,
-        summary.arrangement.display()
+        summary.arrangement.display(),
+        summary.note_arrangement.display()
     );
     Ok(())
 }
