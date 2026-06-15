@@ -719,14 +719,18 @@ fn render_note_arrangement_samples(
             };
             if current_id.as_str() != next_id {
                 *current_id = next_id.to_string();
-                if let Some(instrument) = instruments.get(current_id.as_str()) {
-                    let attenuation = ((1.0 - note.velocity.clamp(0.0, 1.0)) * 22.0) as u8;
-                    write_fm_patch(&mut audio, instrument, channel, attenuation);
-                }
                 if *active {
                     fm_key_on(&mut audio, channel, false);
                     *active = false;
                 }
+            }
+            if *active {
+                fm_key_on(&mut audio, channel, false);
+                *active = false;
+            }
+            if let Some(instrument) = instruments.get(current_id.as_str()) {
+                let attenuation = ((1.0 - note.velocity.clamp(0.0, 1.0)) * 22.0) as u8;
+                write_fm_patch(&mut audio, instrument, channel, attenuation);
             }
             write_fm_pitch(&mut audio, channel, note.hz);
             fm_key_on(&mut audio, channel, true);

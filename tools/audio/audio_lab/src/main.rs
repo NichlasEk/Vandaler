@@ -1341,6 +1341,16 @@ fn note_name_from_midi(midi: i32) -> String {
     format!("{}{}", names[midi.rem_euclid(12) as usize], midi / 12 - 1)
 }
 
+fn fold_midi_to_range(mut midi: i32, min_midi: i32, max_midi: i32) -> i32 {
+    while midi > max_midi {
+        midi -= 12;
+    }
+    while midi < min_midi {
+        midi += 12;
+    }
+    midi.clamp(min_midi, max_midi)
+}
+
 fn goertzel_power(frame: &[f32], sample_rate: u32, hz: f32) -> f32 {
     let omega = 2.0 * std::f32::consts::PI * hz / sample_rate as f32;
     let coeff = 2.0 * omega.cos();
@@ -2109,13 +2119,14 @@ fn stable_midi_candidates(
     max_midi: i32,
 ) -> Vec<Option<(i32, f32)>> {
     let mut raw = Vec::with_capacity(frames.len());
+    let threshold = if track == "bass" { 0.06 } else { 0.05 };
     for frame in frames {
-        let (hz, amp, threshold) = if track == "bass" {
-            (frame.bass_hz, frame.bass_amp, 0.015)
+        let (hz, amp) = if track == "bass" {
+            (frame.bass_hz, frame.bass_amp)
         } else {
-            (frame.lead_hz, frame.lead_amp, 0.012)
+            (frame.lead_hz, frame.lead_amp)
         };
-        let midi = hz_to_midi(hz).map(|midi| midi.clamp(min_midi, max_midi));
+        let midi = hz_to_midi(hz).map(|midi| fold_midi_to_range(midi, min_midi, max_midi));
         raw.push(midi.filter(|_| amp >= threshold).map(|midi| (midi, amp)));
     }
 
@@ -2133,11 +2144,19 @@ fn stable_midi_candidates(
             continue;
         };
 
-        if current.is_none_or(|locked| (locked - midi).abs() <= 1) {
+        if current.is_none() {
             current = Some(midi);
             pending = None;
             pending_count = 0;
             stable.push(Some((midi, amp)));
+            continue;
+        }
+
+        let locked = current.unwrap_or(midi);
+        if (locked - midi).abs() <= 1 {
+            pending = None;
+            pending_count = 0;
+            stable.push(Some((locked, amp)));
             continue;
         }
 
@@ -2148,13 +2167,12 @@ fn stable_midi_candidates(
             pending_count = 1;
         }
 
-        if pending_count >= 3 {
+        let confirm_frames = if track == "bass" { 4 } else { 3 };
+        if pending_count >= confirm_frames {
             current = Some(midi);
             stable.push(Some((midi, amp)));
-        } else if let Some(locked) = current {
-            stable.push(Some((locked, amp * 0.85)));
         } else {
-            stable.push(None);
+            stable.push(Some((locked, amp * 0.75)));
         }
     }
 
@@ -2168,8 +2186,8 @@ fn build_note_events_for_track(
     max_midi: i32,
     instrument_id: &'static str,
 ) -> Vec<NoteEvent> {
-    const MIN_NOTE_FRAMES: usize = 4;
-    const MAX_BRIDGE_GAP: usize = 2;
+    let min_note_frames = if track == "bass" { 8 } else { 6 };
+    let max_bridge_gap = if track == "bass" { 3 } else { 2 };
     let candidates = stable_midi_candidates(frames, track, min_midi, max_midi);
     let mut notes = Vec::new();
     let mut start = 0usize;
@@ -2185,7 +2203,7 @@ fn build_note_events_for_track(
                        velocity_sum: f32,
                        velocity_count: usize| {
         let frames_len = end.saturating_sub(start);
-        if frames_len >= MIN_NOTE_FRAMES && velocity_count > 0 {
+        if frames_len >= min_note_frames && velocity_count > 0 {
             notes.push(NoteEvent {
                 track,
                 start_frame: start,
@@ -2229,7 +2247,7 @@ fn build_note_events_for_track(
             }
             (Some(midi), None) => {
                 gap += 1;
-                if gap <= MAX_BRIDGE_GAP {
+                if gap <= max_bridge_gap {
                     continue;
                 }
                 finish_note(
@@ -2260,7 +2278,54 @@ fn build_note_events_for_track(
         );
     }
 
-    notes
+    merge_neighbor_notes(notes)
+}
+
+fn merge_neighbor_notes(notes: Vec<NoteEvent>) -> Vec<NoteEvent> {
+    let mut merged: Vec<NoteEvent> = Vec::new();
+    for note in notes {
+        if let Some(last) = merged.last_mut() {
+            let last_end = last.start_frame.saturating_add(last.frames);
+            let gap = note.start_frame.saturating_sub(last_end);
+            if last.midi == note.midi && gap <= 4 {
+                let old_frames = last.frames;
+                let total_frames = old_frames + gap + note.frames;
+                let weighted_velocity =
+                    last.velocity * old_frames as f32 + note.velocity * note.frames as f32;
+                last.frames = total_frames;
+                last.velocity =
+                    (weighted_velocity / (old_frames + note.frames) as f32).clamp(0.05, 1.0);
+                continue;
+            }
+        }
+        merged.push(note);
+    }
+    merged
+}
+
+fn note_overlap_frames(a: &NoteEvent, b: &NoteEvent) -> usize {
+    let a_end = a.start_frame.saturating_add(a.frames);
+    let b_end = b.start_frame.saturating_add(b.frames);
+    a_end
+        .min(b_end)
+        .saturating_sub(a.start_frame.max(b.start_frame))
+}
+
+fn filter_lead_notes_against_bass(
+    lead_notes: Vec<NoteEvent>,
+    bass_notes: &[NoteEvent],
+) -> Vec<NoteEvent> {
+    lead_notes
+        .into_iter()
+        .filter(|lead| {
+            !bass_notes.iter().any(|bass| {
+                let overlap = note_overlap_frames(lead, bass);
+                overlap * 2 >= lead.frames
+                    && lead.midi <= bass.midi + 12
+                    && (lead.midi - bass.midi).abs() <= 16
+            })
+        })
+        .collect()
 }
 
 fn build_drum_events(frames: &[AnalysisFrame]) -> Vec<DrumEvent> {
@@ -2304,8 +2369,11 @@ fn write_note_arrangement_json(
         std::fs::create_dir_all(parent)?;
     }
 
-    let bass_notes = build_note_events_for_track(frames, "bass", 24, 55, DEFAULT_BASS_INSTRUMENT);
-    let lead_notes = build_note_events_for_track(frames, "lead", 48, 84, DEFAULT_LEAD_INSTRUMENT);
+    let bass_notes = build_note_events_for_track(frames, "bass", 24, 47, DEFAULT_BASS_INSTRUMENT);
+    let lead_notes = filter_lead_notes_against_bass(
+        build_note_events_for_track(frames, "lead", 48, 84, DEFAULT_LEAD_INSTRUMENT),
+        &bass_notes,
+    );
     let drum_events = build_drum_events(frames);
     let duration = wav.samples.len() as f32 / wav.sample_rate as f32;
     let mut out = String::new();
