@@ -16,6 +16,10 @@
           </div>
           <button id="analyseBtn" class="primary" disabled>Analyse</button>
         </header>
+        <div id="analysisProgress" class="progressBlock" hidden>
+          <div class="progressLabel">Analysing audio pipeline</div>
+          <div class="progressTrack"><div></div></div>
+        </div>
 
         <section class="pickers">
           <button id="openBtn">Open audio</button>
@@ -59,12 +63,20 @@
               <span>DAC Preview</span>
               <button id="loadDacBtn" disabled>Load</button>
             </div>
+            <div id="dacProgress" class="progressBlock compact" hidden>
+              <div class="progressLabel">Loading DAC preview</div>
+              <div class="progressTrack"><div></div></div>
+            </div>
             <audio id="dacPlayer" controls></audio>
           </article>
           <article>
             <div class="panelTitle">
               <span>Arrangement</span>
               <button id="loadArrangementBtn" disabled>Render</button>
+            </div>
+            <div id="arrangementProgress" class="progressBlock compact" hidden>
+              <div class="progressLabel">Rendering frame preview</div>
+              <div class="progressTrack"><div></div></div>
             </div>
             <audio id="arrangementPlayer" controls></audio>
           </article>
@@ -73,12 +85,20 @@
               <span>Note Preview</span>
               <button id="loadNoteBtn" disabled>Render</button>
             </div>
+            <div id="noteProgress" class="progressBlock compact" hidden>
+              <div class="progressLabel">Rendering note preview</div>
+              <div class="progressTrack"><div></div></div>
+            </div>
             <audio id="notePlayer" controls></audio>
           </article>
           <article>
             <div class="panelTitle">
               <span>Instrument</span>
               <button id="previewInstrumentBtn" disabled>Preview</button>
+            </div>
+            <div id="instrumentProgress" class="progressBlock compact" hidden>
+              <div class="progressLabel">Rendering instrument</div>
+              <div class="progressTrack"><div></div></div>
             </div>
             <audio id="instrumentPlayer" controls></audio>
           </article>
@@ -89,6 +109,10 @@
           <div><span>Active</span><strong id="activeFrames">-</strong></div>
           <div><span>Runtime Events</span><strong id="runtimeEvents">-</strong></div>
           <div><span>DAC Chunks</span><strong id="dacChunks">-</strong></div>
+          <div><span>Key</span><strong id="musicKey">-</strong></div>
+          <div><span>BPM</span><strong id="musicBpm">-</strong></div>
+          <div><span>Notes</span><strong id="musicNotes">-</strong></div>
+          <div><span>Drums</span><strong id="musicDrums">-</strong></div>
         </section>
 
         <section class="exports">

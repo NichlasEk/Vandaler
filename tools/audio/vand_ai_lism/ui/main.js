@@ -15,6 +15,21 @@ function setLog(message) {
   $("log").textContent = message;
 }
 
+function setBusy(progressId, buttonId, busy, label) {
+  const progress = $(progressId);
+  const button = $(buttonId);
+  if (progress) progress.hidden = !busy;
+  if (!button) return;
+  if (busy) {
+    button.dataset.idleLabel = button.textContent;
+    button.textContent = label;
+    button.disabled = true;
+  } else {
+    button.textContent = button.dataset.idleLabel || button.textContent;
+    delete button.dataset.idleLabel;
+  }
+}
+
 function setSource(path) {
   state.source = path || "";
   $("sourcePath").textContent = state.source || "No file selected";
@@ -33,6 +48,10 @@ function setSummary(summary) {
   $("activeFrames").textContent = summary ? summary.active_frames : "-";
   $("runtimeEvents").textContent = summary ? summary.runtime_events : "-";
   $("dacChunks").textContent = summary ? summary.dac_chunks : "-";
+  $("musicKey").textContent = summary?.key || "-";
+  $("musicBpm").textContent = summary?.bpm ? Math.round(summary.bpm).toString() : "-";
+  $("musicNotes").textContent = summary ? `${summary.bass_notes || 0}/${summary.lead_notes || 0}` : "-";
+  $("musicDrums").textContent = summary ? summary.drum_events || 0 : "-";
   $("loadDacBtn").disabled = !summary?.dac_preview;
   $("loadArrangementBtn").disabled = !summary?.arrangement;
   $("loadNoteBtn").disabled = !summary?.note_arrangement;
@@ -47,6 +66,7 @@ function setSummary(summary) {
     ["Bundle", summary.bundle_dir],
     ["Arrangement", summary.arrangement],
     ["Note Arrangement", summary.note_arrangement],
+    ["Preview Report", summary.preview_report],
     ["Import", summary.import_metadata],
     ["DAC Preview", summary.dac_preview],
   ]) {
@@ -109,6 +129,7 @@ async function previewInstrument() {
   const instrument = state.selectedInstrument;
   if (!instrument?.file) return;
   const player = $("instrumentPlayer");
+  setBusy("instrumentProgress", "previewInstrumentBtn", true, "Rendering...");
   setLog(`Rendering instrument preview...\n${instrument.file}`);
   try {
     player.src = await invoke("instrument_preview_data_url", { path: instrument.file });
@@ -116,6 +137,9 @@ async function previewInstrument() {
     setLog(`Playing instrument preview:\n${instrument.name}\n${instrument.file}`);
   } catch (err) {
     setLog(`Instrument preview failed:\n${err}`);
+  } finally {
+    setBusy("instrumentProgress", "previewInstrumentBtn", false);
+    $("previewInstrumentBtn").disabled = !state.selectedInstrument;
   }
 }
 
@@ -174,7 +198,7 @@ async function chooseOutput() {
 
 async function analyse() {
   if (!state.source) return;
-  $("analyseBtn").disabled = true;
+  setBusy("analysisProgress", "analyseBtn", true, "Analysing...");
   setLog("Analysing...");
   try {
     const result = await invoke("analyse_audio", {
@@ -186,13 +210,15 @@ async function analyse() {
   } catch (err) {
     setLog(`Analysis failed:\n${err}`);
   } finally {
+    setBusy("analysisProgress", "analyseBtn", false);
     $("analyseBtn").disabled = !state.source;
   }
 }
 
-async function loadPlayer(playerId, path, label) {
+async function loadPlayer(playerId, path, label, progressId = "", buttonId = "") {
   if (!path) return;
   const player = $(playerId);
+  if (progressId && buttonId) setBusy(progressId, buttonId, true, "Loading...");
   setLog(`Loading ${label}...\n${path}`);
   try {
     player.src = await invoke("audio_data_url", { path });
@@ -200,6 +226,11 @@ async function loadPlayer(playerId, path, label) {
     setLog(`Playing ${label}:\n${path}`);
   } catch (err) {
     setLog(`${label} playback failed:\n${err}`);
+  } finally {
+    if (progressId && buttonId) {
+      setBusy(progressId, buttonId, false);
+      $(buttonId).disabled = false;
+    }
   }
 }
 
@@ -210,12 +241,13 @@ function loadOriginal() {
 
 function loadDac() {
   if (!state.summary?.dac_preview) return;
-  loadPlayer("dacPlayer", state.summary.dac_preview, "DAC preview");
+  loadPlayer("dacPlayer", state.summary.dac_preview, "DAC preview", "dacProgress", "loadDacBtn");
 }
 
 async function loadArrangement() {
   if (!state.summary?.arrangement) return;
   const player = $("arrangementPlayer");
+  setBusy("arrangementProgress", "loadArrangementBtn", true, "Rendering...");
   setLog(`Rendering arrangement preview...\n${state.summary.arrangement}`);
   try {
     player.src = await invoke("arrangement_preview_data_url", {
@@ -226,12 +258,16 @@ async function loadArrangement() {
     setLog(`Playing arrangement preview:\n${state.summary.arrangement}`);
   } catch (err) {
     setLog(`Arrangement preview failed:\n${err}`);
+  } finally {
+    setBusy("arrangementProgress", "loadArrangementBtn", false);
+    $("loadArrangementBtn").disabled = !state.summary?.arrangement;
   }
 }
 
 async function loadNote() {
   if (!state.summary?.note_arrangement) return;
   const player = $("notePlayer");
+  setBusy("noteProgress", "loadNoteBtn", true, "Rendering...");
   setLog(`Rendering note preview...\n${state.summary.note_arrangement}`);
   try {
     player.src = await invoke("note_preview_data_url", {
@@ -242,6 +278,9 @@ async function loadNote() {
     setLog(`Playing note preview:\n${state.summary.note_arrangement}`);
   } catch (err) {
     setLog(`Note preview failed:\n${err}`);
+  } finally {
+    setBusy("noteProgress", "loadNoteBtn", false);
+    $("loadNoteBtn").disabled = !state.summary?.note_arrangement;
   }
 }
 

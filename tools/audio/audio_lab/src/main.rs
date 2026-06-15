@@ -430,6 +430,7 @@ struct AnalysisSummary {
     dac_chunks: usize,
     arrangement: PathBuf,
     note_arrangement: PathBuf,
+    preview_report: PathBuf,
     bundle_dir: PathBuf,
     import_metadata: PathBuf,
     dac_preview: PathBuf,
@@ -446,6 +447,17 @@ struct NoteEvent {
     instrument_id: &'static str,
 }
 
+#[derive(Clone, Copy)]
+struct MusicalContext {
+    key_root: i32,
+    mode: &'static str,
+    key_confidence: f32,
+    bpm: f32,
+    frames_per_beat: f32,
+    grid_frames: usize,
+}
+
+#[derive(Clone)]
 struct DrumEvent {
     start_frame: usize,
     kind: &'static str,
@@ -1351,6 +1363,158 @@ fn fold_midi_to_range(mut midi: i32, min_midi: i32, max_midi: i32) -> i32 {
     midi.clamp(min_midi, max_midi)
 }
 
+fn pitch_class_name(root: i32) -> &'static str {
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    NAMES[root.rem_euclid(12) as usize]
+}
+
+fn mode_intervals(mode: &str) -> &'static [i32] {
+    if mode == "minor" {
+        &[0, 2, 3, 5, 7, 8, 10]
+    } else {
+        &[0, 2, 4, 5, 7, 9, 11]
+    }
+}
+
+fn scale_contains(root: i32, mode: &str, midi: i32) -> bool {
+    let pc = (midi - root).rem_euclid(12);
+    mode_intervals(mode).contains(&pc)
+}
+
+fn snap_midi_to_scale(midi: i32, root: i32, mode: &str, min_midi: i32, max_midi: i32) -> i32 {
+    if scale_contains(root, mode, midi) {
+        return midi;
+    }
+    let mut best = midi;
+    let mut best_distance = i32::MAX;
+    for candidate in (midi - 2)..=(midi + 2) {
+        if candidate < min_midi || candidate > max_midi || !scale_contains(root, mode, candidate) {
+            continue;
+        }
+        let distance = (candidate - midi).abs();
+        if distance < best_distance {
+            best = candidate;
+            best_distance = distance;
+        }
+    }
+    best
+}
+
+fn detect_key(frames: &[AnalysisFrame]) -> (i32, &'static str, f32) {
+    const MAJOR_PROFILE: [f32; 12] = [
+        6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88,
+    ];
+    const MINOR_PROFILE: [f32; 12] = [
+        6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
+    ];
+
+    let mut histogram = [0.0f32; 12];
+    for frame in frames {
+        if let Some(midi) = hz_to_midi(frame.bass_hz) {
+            histogram[midi.rem_euclid(12) as usize] += frame.bass_amp * 1.6;
+        }
+        if let Some(midi) = hz_to_midi(frame.lead_hz) {
+            histogram[midi.rem_euclid(12) as usize] += frame.lead_amp;
+        }
+    }
+
+    let total: f32 = histogram.iter().sum();
+    if total <= 0.0 {
+        return (0, "minor", 0.0);
+    }
+
+    let mut best = (0, "minor", f32::MIN);
+    let mut second = f32::MIN;
+    for root in 0..12 {
+        for (mode, profile) in [("major", MAJOR_PROFILE), ("minor", MINOR_PROFILE)] {
+            let mut score = 0.0;
+            for pc in 0..12 {
+                score += histogram[(root + pc) % 12] * profile[pc];
+            }
+            if score > best.2 {
+                second = best.2;
+                best = (root as i32, mode, score);
+            } else if score > second {
+                second = score;
+            }
+        }
+    }
+
+    let confidence = ((best.2 - second) / best.2.max(1.0)).clamp(0.0, 1.0);
+    (best.0, best.1, confidence)
+}
+
+fn detect_bpm(frames: &[AnalysisFrame]) -> f32 {
+    let mut onsets = Vec::new();
+    let mut last = 0usize;
+    for frame in frames {
+        let strong = frame.transient > 0.55 && frame.rms > 0.025;
+        if strong && frame.index.saturating_sub(last) > 6 {
+            onsets.push(frame.index);
+            last = frame.index;
+        }
+    }
+    if onsets.len() < 4 {
+        return 120.0;
+    }
+
+    let mut bins = [0.0f32; 121];
+    for pair in onsets.windows(2) {
+        let mut bpm =
+            60.0 * 44_100.0 / (pair[1].saturating_sub(pair[0]).max(1) as f32 * ANALYSIS_HOP as f32);
+        while bpm < 80.0 {
+            bpm *= 2.0;
+        }
+        while bpm > 200.0 {
+            bpm *= 0.5;
+        }
+        if (80.0..=200.0).contains(&bpm) {
+            bins[(bpm.round() as usize).saturating_sub(80).min(120)] += 1.0;
+        }
+    }
+
+    bins.iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(index, _)| 80.0 + index as f32)
+        .unwrap_or(120.0)
+}
+
+fn analyse_musical_context(frames: &[AnalysisFrame], sample_rate: u32) -> MusicalContext {
+    let (key_root, mode, key_confidence) = detect_key(frames);
+    let bpm = detect_bpm(frames);
+    let frames_per_beat = (sample_rate as f32 * 60.0) / (bpm * ANALYSIS_HOP as f32);
+    let grid_frames = (frames_per_beat / 4.0).round().max(2.0) as usize;
+    MusicalContext {
+        key_root,
+        mode,
+        key_confidence,
+        bpm,
+        frames_per_beat,
+        grid_frames,
+    }
+}
+
+fn snap_frame_to_grid(frame: usize, grid_frames: usize, max_shift: usize) -> usize {
+    if grid_frames < 2 {
+        return frame;
+    }
+    let lower = frame / grid_frames * grid_frames;
+    let upper = lower + grid_frames;
+    let nearest = if frame - lower <= upper - frame {
+        lower
+    } else {
+        upper
+    };
+    if frame.abs_diff(nearest) <= max_shift {
+        nearest
+    } else {
+        frame
+    }
+}
+
 fn goertzel_power(frame: &[f32], sample_rate: u32, hz: f32) -> f32 {
     let omega = 2.0 * std::f32::consts::PI * hz / sample_rate as f32;
     let coeff = 2.0 * omega.cos();
@@ -2117,6 +2281,7 @@ fn stable_midi_candidates(
     track: &'static str,
     min_midi: i32,
     max_midi: i32,
+    context: &MusicalContext,
 ) -> Vec<Option<(i32, f32)>> {
     let mut raw = Vec::with_capacity(frames.len());
     let threshold = if track == "bass" { 0.06 } else { 0.05 };
@@ -2126,7 +2291,14 @@ fn stable_midi_candidates(
         } else {
             (frame.lead_hz, frame.lead_amp)
         };
-        let midi = hz_to_midi(hz).map(|midi| fold_midi_to_range(midi, min_midi, max_midi));
+        let midi = hz_to_midi(hz).map(|midi| {
+            let folded = fold_midi_to_range(midi, min_midi, max_midi);
+            if amp < threshold * 2.25 || context.key_confidence > 0.08 {
+                snap_midi_to_scale(folded, context.key_root, context.mode, min_midi, max_midi)
+            } else {
+                folded
+            }
+        });
         raw.push(midi.filter(|_| amp >= threshold).map(|midi| (midi, amp)));
     }
 
@@ -2185,10 +2357,11 @@ fn build_note_events_for_track(
     min_midi: i32,
     max_midi: i32,
     instrument_id: &'static str,
+    context: &MusicalContext,
 ) -> Vec<NoteEvent> {
     let min_note_frames = if track == "bass" { 8 } else { 6 };
     let max_bridge_gap = if track == "bass" { 3 } else { 2 };
-    let candidates = stable_midi_candidates(frames, track, min_midi, max_midi);
+    let candidates = stable_midi_candidates(frames, track, min_midi, max_midi, context);
     let mut notes = Vec::new();
     let mut start = 0usize;
     let mut active_midi: Option<i32> = None;
@@ -2278,7 +2451,23 @@ fn build_note_events_for_track(
         );
     }
 
-    merge_neighbor_notes(notes)
+    quantize_note_grid(merge_neighbor_notes(notes), context)
+}
+
+fn quantize_note_grid(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<NoteEvent> {
+    let max_shift = (context.grid_frames / 3).max(1);
+    let mut quantized = Vec::with_capacity(notes.len());
+    for mut note in notes {
+        let end = note.start_frame.saturating_add(note.frames);
+        let snapped_start = snap_frame_to_grid(note.start_frame, context.grid_frames, max_shift);
+        let snapped_end = snap_frame_to_grid(end, context.grid_frames, max_shift);
+        if snapped_end > snapped_start {
+            note.start_frame = snapped_start;
+            note.frames = snapped_end - snapped_start;
+        }
+        quantized.push(note);
+    }
+    merge_neighbor_notes(quantized)
 }
 
 fn merge_neighbor_notes(notes: Vec<NoteEvent>) -> Vec<NoteEvent> {
@@ -2317,6 +2506,7 @@ fn filter_lead_notes_against_bass(
 ) -> Vec<NoteEvent> {
     lead_notes
         .into_iter()
+        .filter(|lead| lead.velocity >= 0.075 && lead.frames >= 8)
         .filter(|lead| {
             !bass_notes.iter().any(|bass| {
                 let overlap = note_overlap_frames(lead, bass);
@@ -2324,6 +2514,49 @@ fn filter_lead_notes_against_bass(
                     && lead.midi <= bass.midi + 12
                     && (lead.midi - bass.midi).abs() <= 16
             })
+        })
+        .collect()
+}
+
+fn lock_bass_pattern(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<NoteEvent> {
+    let bar_frames = (context.frames_per_beat * 4.0).round().max(16.0) as usize;
+    let slot_count = 16usize;
+    let slot_frames = (bar_frames / slot_count).max(1);
+    let mut slot_counts = vec![[0u16; 12]; slot_count];
+
+    for note in &notes {
+        if note.velocity < 0.08 {
+            continue;
+        }
+        let slot = (note.start_frame % bar_frames) / slot_frames;
+        slot_counts[slot.min(slot_count - 1)][note.midi.rem_euclid(12) as usize] += 1;
+    }
+
+    notes
+        .into_iter()
+        .map(|mut note| {
+            let slot = ((note.start_frame % bar_frames) / slot_frames).min(slot_count - 1);
+            let (pc, count) = slot_counts[slot]
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, count)| **count)
+                .map(|(pc, count)| (pc as i32, *count))
+                .unwrap_or((note.midi.rem_euclid(12), 0));
+            if count >= 3
+                && note.velocity < 0.42
+                && note.frames < (context.frames_per_beat * 1.25) as usize
+            {
+                let mut candidate = note.midi;
+                while candidate.rem_euclid(12) != pc {
+                    candidate += 1;
+                    if candidate > 47 {
+                        candidate -= 12;
+                    }
+                }
+                note.midi = fold_midi_to_range(candidate, 24, 47);
+                note.hz = midi_to_hz(note.midi);
+            }
+            note
         })
         .collect()
 }
@@ -2359,6 +2592,102 @@ fn build_drum_events(frames: &[AnalysisFrame]) -> Vec<DrumEvent> {
     drums
 }
 
+fn build_note_preview_data(
+    frames: &[AnalysisFrame],
+    sample_rate: u32,
+) -> (
+    MusicalContext,
+    Vec<NoteEvent>,
+    Vec<NoteEvent>,
+    Vec<DrumEvent>,
+) {
+    let context = analyse_musical_context(frames, sample_rate);
+    let bass_notes = lock_bass_pattern(
+        build_note_events_for_track(frames, "bass", 24, 47, DEFAULT_BASS_INSTRUMENT, &context),
+        &context,
+    );
+    let lead_notes = filter_lead_notes_against_bass(
+        build_note_events_for_track(frames, "lead", 48, 84, DEFAULT_LEAD_INSTRUMENT, &context),
+        &bass_notes,
+    );
+    let drum_events = build_drum_events(frames);
+    (context, bass_notes, lead_notes, drum_events)
+}
+
+fn write_preview_report_json(
+    path: &Path,
+    input: &Path,
+    wav: &WavData,
+    frames: &[AnalysisFrame],
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let (context, bass_notes, lead_notes, drum_events) =
+        build_note_preview_data(frames, wav.sample_rate);
+    let active_frames = frames
+        .iter()
+        .filter(|frame| frame.class_name != "silence")
+        .count();
+    let avg_bass_frames = if bass_notes.is_empty() {
+        0.0
+    } else {
+        bass_notes
+            .iter()
+            .map(|note| note.frames as f32)
+            .sum::<f32>()
+            / bass_notes.len() as f32
+    };
+    let avg_lead_frames = if lead_notes.is_empty() {
+        0.0
+    } else {
+        lead_notes
+            .iter()
+            .map(|note| note.frames as f32)
+            .sum::<f32>()
+            / lead_notes.len() as f32
+    };
+    let text = format!(
+        concat!(
+            "{{\n",
+            "  \"format\": \"vandaler-vand-preview-report-v0\",\n",
+            "  \"source\": \"{}\",\n",
+            "  \"key\": \"{} {}\",\n",
+            "  \"key_root\": {},\n",
+            "  \"mode\": \"{}\",\n",
+            "  \"key_confidence\": {:.5},\n",
+            "  \"bpm\": {:.3},\n",
+            "  \"frames_per_beat\": {:.3},\n",
+            "  \"grid_frames\": {},\n",
+            "  \"frames\": {},\n",
+            "  \"active_frames\": {},\n",
+            "  \"bass_notes\": {},\n",
+            "  \"lead_notes\": {},\n",
+            "  \"drum_events\": {},\n",
+            "  \"avg_bass_note_frames\": {:.3},\n",
+            "  \"avg_lead_note_frames\": {:.3}\n",
+            "}}\n"
+        ),
+        json_escape(&input.display().to_string()),
+        pitch_class_name(context.key_root),
+        context.mode,
+        context.key_root,
+        context.mode,
+        context.key_confidence,
+        context.bpm,
+        context.frames_per_beat,
+        context.grid_frames,
+        frames.len(),
+        active_frames,
+        bass_notes.len(),
+        lead_notes.len(),
+        drum_events.len(),
+        avg_bass_frames,
+        avg_lead_frames
+    );
+    std::fs::write(path, text)
+}
+
 fn write_note_arrangement_json(
     path: &Path,
     input: &Path,
@@ -2369,12 +2698,8 @@ fn write_note_arrangement_json(
         std::fs::create_dir_all(parent)?;
     }
 
-    let bass_notes = build_note_events_for_track(frames, "bass", 24, 47, DEFAULT_BASS_INSTRUMENT);
-    let lead_notes = filter_lead_notes_against_bass(
-        build_note_events_for_track(frames, "lead", 48, 84, DEFAULT_LEAD_INSTRUMENT),
-        &bass_notes,
-    );
-    let drum_events = build_drum_events(frames);
+    let (context, bass_notes, lead_notes, drum_events) =
+        build_note_preview_data(frames, wav.sample_rate);
     let duration = wav.samples.len() as f32 / wav.sample_rate as f32;
     let mut out = String::new();
     out.push_str("{\n");
@@ -2391,7 +2716,25 @@ fn write_note_arrangement_json(
         "  \"instrument_bank\": \"{}\",\n",
         DEFAULT_INSTRUMENT_BANK
     ));
-    out.push_str("  \"pipeline\": [\"frame_analysis\", \"semitone_quantize\", \"pitch_hysteresis\", \"short_note_filter\", \"drum_gate\"],\n");
+    out.push_str(&format!(
+        concat!(
+            "  \"analysis\": {{\"key\": \"{} {}\", \"key_root\": {}, \"mode\": \"{}\", ",
+            "\"key_confidence\": {:.5}, \"bpm\": {:.3}, \"frames_per_beat\": {:.3}, ",
+            "\"grid_frames\": {}, \"bass_notes\": {}, \"lead_notes\": {}, \"drum_events\": {}}},\n"
+        ),
+        pitch_class_name(context.key_root),
+        context.mode,
+        context.key_root,
+        context.mode,
+        context.key_confidence,
+        context.bpm,
+        context.frames_per_beat,
+        context.grid_frames,
+        bass_notes.len(),
+        lead_notes.len(),
+        drum_events.len()
+    ));
+    out.push_str("  \"pipeline\": [\"frame_analysis\", \"key_detection\", \"scale_snap\", \"beat_grid\", \"pitch_hysteresis\", \"bass_pattern_lock\", \"lead_confidence_filter\", \"drum_gate\"],\n");
 
     out.push_str("  \"notes\": [\n");
     let total_notes = bass_notes.len() + lead_notes.len();
@@ -2455,10 +2798,12 @@ fn analyse_input(
     let runtime_events = build_runtime_events(&frames, imported.wav.sample_rate, &dac_chunks);
     let import_metadata = bundle_dir.join("import.json");
     let note_arrangement = bundle_dir.join("note_arrangement.vand-audio.json");
+    let preview_report = bundle_dir.join("preview_report.json");
     let dac_preview = write_dac_preview_wav(&bundle_dir, &dac_chunks)?;
     write_import_metadata(&import_metadata, input, &imported)?;
     write_analysis_json(&out, input, &imported.wav, &frames)?;
     write_note_arrangement_json(&note_arrangement, input, &imported.wav, &frames)?;
+    write_preview_report_json(&preview_report, input, &imported.wav, &frames)?;
     write_split_tracks(&bundle_dir, input, &frames)?;
     write_dac_chunks_json(
         &bundle_dir.join("dac_chunks.json"),
@@ -2496,6 +2841,7 @@ fn analyse_input(
         dac_chunks: dac_chunks.len(),
         arrangement: out,
         note_arrangement,
+        preview_report,
         bundle_dir,
         import_metadata,
         dac_preview,
@@ -2509,14 +2855,15 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing audio path"))?;
     let summary = analyse_input(input, args.out.clone(), args.install_sgdk)?;
     println!(
-        "analysed {} | {} frames, {} active, {} runtime events, {} dac chunks | wrote {} | note {}",
+        "analysed {} | {} frames, {} active, {} runtime events, {} dac chunks | wrote {} | note {} | report {}",
         input.display(),
         summary.frames,
         summary.active_frames,
         summary.runtime_events,
         summary.dac_chunks,
         summary.arrangement.display(),
-        summary.note_arrangement.display()
+        summary.note_arrangement.display(),
+        summary.preview_report.display()
     );
     Ok(())
 }

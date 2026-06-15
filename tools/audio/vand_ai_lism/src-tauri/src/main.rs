@@ -20,9 +20,29 @@ struct AnalysisSummary {
     dac_chunks: u32,
     arrangement: String,
     note_arrangement: String,
+    preview_report: String,
+    key: String,
+    bpm: f32,
+    bass_notes: u32,
+    lead_notes: u32,
+    drum_events: u32,
     bundle_dir: String,
     import_metadata: String,
     dac_preview: String,
+}
+
+#[derive(Default, Deserialize)]
+struct PreviewReport {
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    bpm: f32,
+    #[serde(default)]
+    bass_notes: u32,
+    #[serde(default)]
+    lead_notes: u32,
+    #[serde(default)]
+    drum_events: u32,
 }
 
 #[derive(Serialize)]
@@ -871,6 +891,11 @@ fn analyse_audio(input: String, output_dir: String) -> Result<AnalysisResult, St
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| "analysis output path has no parent".to_string())?;
+    let preview_report_path = bundle_dir.join("preview_report.json");
+    let preview_report = fs::read_to_string(&preview_report_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<PreviewReport>(&text).ok())
+        .unwrap_or_default();
     let summary = AnalysisSummary {
         frames: parse_metric(&log, "frames,"),
         active_frames: parse_metric(&log, "active,"),
@@ -881,6 +906,12 @@ fn analyse_audio(input: String, output_dir: String) -> Result<AnalysisResult, St
             .join("note_arrangement.vand-audio.json")
             .display()
             .to_string(),
+        preview_report: preview_report_path.display().to_string(),
+        key: preview_report.key,
+        bpm: preview_report.bpm,
+        bass_notes: preview_report.bass_notes,
+        lead_notes: preview_report.lead_notes,
+        drum_events: preview_report.drum_events,
         import_metadata: bundle_dir.join("import.json").display().to_string(),
         dac_preview: bundle_dir.join("dac_preview.wav").display().to_string(),
         bundle_dir: bundle_dir.display().to_string(),
