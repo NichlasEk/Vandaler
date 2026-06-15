@@ -1,9 +1,16 @@
 use euther_oxide::audio::Audio;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+const DEFAULT_INSTRUMENT_BANK: &str =
+    "audio/instruments/vand_furnace_core/bank.vand-instruments.json";
+const DEFAULT_BASS_INSTRUMENT: &str = "growl_bass_wobbly";
+const DEFAULT_LEAD_INSTRUMENT: &str = "fm_grinder";
+const DEFAULT_NOISE_INSTRUMENT: &str = "psg_echo_warble";
 
 #[derive(Serialize)]
 struct AnalysisSummary {
@@ -26,7 +33,10 @@ struct AnalysisResult {
 #[derive(Deserialize, Serialize)]
 struct InstrumentBankManifest {
     format: String,
+    #[serde(default)]
     source_dir: String,
+    #[serde(default)]
+    source: String,
     license_review: String,
     instrument_count: u32,
     instruments: Vec<InstrumentBankEntry>,
@@ -49,7 +59,7 @@ struct InstrumentBankResult {
     log: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct VandInstrument {
     name: String,
     chip: String,
@@ -57,14 +67,14 @@ struct VandInstrument {
     fm: Option<VandFmPatch>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct VandFmPatch {
     algorithm: u8,
     feedback: u8,
     operators: Vec<VandFmOperator>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct VandFmOperator {
     mult: u8,
     tl: u8,
@@ -73,6 +83,47 @@ struct VandFmOperator {
     sl: u8,
     rr: u8,
     dt: u8,
+}
+
+#[derive(Deserialize)]
+struct VandArrangement {
+    #[serde(default = "default_sample_rate")]
+    sample_rate: u32,
+    #[serde(default = "default_arrangement_hop")]
+    hop: usize,
+    #[serde(default)]
+    instrument_bank: String,
+    events: Vec<VandArrangementFrame>,
+}
+
+#[derive(Deserialize)]
+struct VandArrangementFrame {
+    #[serde(default)]
+    bass_hz: f32,
+    #[serde(default)]
+    bass_amp: f32,
+    #[serde(default)]
+    bass_instrument_id: String,
+    #[serde(default)]
+    lead_hz: f32,
+    #[serde(default)]
+    lead_amp: f32,
+    #[serde(default)]
+    lead_instrument_id: String,
+    #[serde(default)]
+    noise_amp: f32,
+    #[serde(default)]
+    transient: f32,
+    #[serde(default)]
+    noise_instrument_id: String,
+}
+
+fn default_sample_rate() -> u32 {
+    44_100
+}
+
+fn default_arrangement_hop() -> usize {
+    512
 }
 
 fn repo_root() -> Result<PathBuf, String> {
@@ -186,74 +237,130 @@ fn write_preview_wav(path: &Path, sample_rate: u32, samples: &[i16]) -> Result<(
     Ok(())
 }
 
+fn resolve_existing_path(repo: &Path, base: &Path, raw: &str) -> PathBuf {
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        return path;
+    }
+
+    let repo_path = repo.join(&path);
+    if repo_path.exists() {
+        repo_path
+    } else {
+        base.join(path)
+    }
+}
+
+fn read_instrument(path: &Path) -> Result<VandInstrument, String> {
+    let text = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    serde_json::from_str(&text).map_err(|err| format!("invalid instrument JSON: {err}"))
+}
+
+fn write_fm_patch(audio: &mut Audio, instrument: &VandInstrument, channel: usize, attenuation: u8) {
+    const OP_OFFSETS: [u8; 4] = [0x00, 0x04, 0x08, 0x0c];
+    let Some(fm) = instrument.fm.as_ref() else {
+        return;
+    };
+
+    audio.ym2612.write_register(
+        0,
+        0xb0 + channel as u8,
+        (fm.algorithm & 0x07) | ((fm.feedback & 0x07) << 3),
+        None,
+        true,
+    );
+    audio
+        .ym2612
+        .write_register(0, 0xb4 + channel as u8, 0xc0, None, true);
+    for (index, op) in fm.operators.iter().take(4).enumerate() {
+        let reg = OP_OFFSETS[index] + channel as u8;
+        audio.ym2612.write_register(
+            0,
+            0x30 + reg,
+            ((op.dt & 0x07) << 4) | (op.mult & 0x0f),
+            None,
+            true,
+        );
+        audio.ym2612.write_register(
+            0,
+            0x40 + reg,
+            op.tl.saturating_add(attenuation).min(127),
+            None,
+            true,
+        );
+        audio
+            .ym2612
+            .write_register(0, 0x50 + reg, op.ar.min(31), None, true);
+        audio
+            .ym2612
+            .write_register(0, 0x60 + reg, op.dr.min(31), None, true);
+        audio.ym2612.write_register(0, 0x70 + reg, 0x04, None, true);
+        audio.ym2612.write_register(
+            0,
+            0x80 + reg,
+            ((op.sl.min(15)) << 4) | op.rr.min(15),
+            None,
+            true,
+        );
+        audio.ym2612.write_register(0, 0x90 + reg, 0x00, None, true);
+    }
+}
+
+fn write_fm_pitch(audio: &mut Audio, channel: usize, hz: f32) {
+    let (fnum, block) = ym2612_pitch_for_hz(hz);
+    audio.ym2612.write_register(
+        0,
+        0xa4 + channel as u8,
+        ((block & 0x07) << 3) | ((fnum >> 8) as u8 & 0x07),
+        None,
+        true,
+    );
+    audio
+        .ym2612
+        .write_register(0, 0xa0 + channel as u8, (fnum & 0xff) as u8, None, true);
+}
+
+fn fm_key_on(audio: &mut Audio, channel: usize, on: bool) {
+    let value = if on {
+        0xf0 | channel as u8
+    } else {
+        channel as u8
+    };
+    audio.ym2612.write_register(0, 0x28, value, Some(0), true);
+}
+
+fn amp_to_fm_attenuation(amp: f32) -> u8 {
+    let amp = amp.clamp(0.0, 1.0);
+    ((1.0 - amp) * 48.0).round().clamp(0.0, 64.0) as u8
+}
+
+fn amp_to_psg_volume(amp: f32) -> u8 {
+    let amp = amp.clamp(0.0, 1.0);
+    (15.0 - amp * 14.0).round().clamp(0.0, 15.0) as u8
+}
+
 fn render_instrument_samples(instrument: &VandInstrument) -> Vec<i16> {
     const RATE: u32 = 44_100;
     const FRAME_SAMPLES: usize = 735;
     const FRAMES: usize = 96;
     const KEY_OFF_FRAME: usize = 62;
     const CHANNEL: usize = 0;
-    const OP_OFFSETS: [u8; 4] = [0x00, 0x04, 0x08, 0x0c];
     let mut audio = Audio::new();
     audio.reset();
     let mut out = Vec::with_capacity(FRAMES * FRAME_SAMPLES);
     let name_lc = instrument.name.to_ascii_lowercase();
-    let (fnum, block) = if instrument.category == "bass" || name_lc.contains("bass") {
-        ym2612_pitch_for_hz(110.0)
+    let preview_hz = if instrument.category == "bass" || name_lc.contains("bass") {
+        110.0
     } else {
-        ym2612_pitch_for_hz(220.0)
+        220.0
     };
 
-    if let Some(fm) = instrument.fm.as_ref() {
+    if instrument.fm.is_some() {
         audio.ym2612.write_register(0, 0x22, 0x00, None, true);
         audio.ym2612.write_register(0, 0x27, 0x00, None, true);
-        audio.ym2612.write_register(
-            0,
-            0xb0 + CHANNEL as u8,
-            (fm.algorithm & 0x07) | ((fm.feedback & 0x07) << 3),
-            None,
-            true,
-        );
-        audio
-            .ym2612
-            .write_register(0, 0xb4 + CHANNEL as u8, 0xc0, None, true);
-        for (index, op) in fm.operators.iter().take(4).enumerate() {
-            let reg = OP_OFFSETS[index] + CHANNEL as u8;
-            audio.ym2612.write_register(
-                0,
-                0x30 + reg,
-                ((op.dt & 0x07) << 4) | (op.mult & 0x0f),
-                None,
-                true,
-            );
-            audio
-                .ym2612
-                .write_register(0, 0x40 + reg, op.tl.min(127), None, true);
-            audio
-                .ym2612
-                .write_register(0, 0x50 + reg, op.ar.min(31), None, true);
-            audio
-                .ym2612
-                .write_register(0, 0x60 + reg, op.dr.min(31), None, true);
-            audio.ym2612.write_register(0, 0x70 + reg, 0x04, None, true);
-            audio.ym2612.write_register(
-                0,
-                0x80 + reg,
-                ((op.sl.min(15)) << 4) | op.rr.min(15),
-                None,
-                true,
-            );
-            audio.ym2612.write_register(0, 0x90 + reg, 0x00, None, true);
-        }
-        audio.ym2612.write_register(
-            0,
-            0xa4 + CHANNEL as u8,
-            ((block & 0x07) << 3) | ((fnum >> 8) as u8 & 0x07),
-            None,
-            true,
-        );
-        audio
-            .ym2612
-            .write_register(0, 0xa0 + CHANNEL as u8, (fnum & 0xff) as u8, None, true);
+        write_fm_patch(&mut audio, instrument, CHANNEL, 0);
+        write_fm_pitch(&mut audio, CHANNEL, preview_hz);
     } else if instrument.chip == "sn76489" {
         psg_set_tone(&mut audio, 0, 440.0, 3);
     }
@@ -317,6 +424,162 @@ fn psg_set_tone(audio: &mut Audio, channel: u8, hz: f64, volume: u8) {
     psg_write_latch(audio, channel, false, (period & 0x0f) as u8);
     audio.psg.write(((period >> 4) & 0x3f) as u8, None, None);
     psg_latch_volume(audio, channel, volume);
+}
+
+fn psg_set_noise(audio: &mut Audio, amp: f32) {
+    audio.psg.write(0xe7, None, None);
+    psg_latch_volume(audio, 3, amp_to_psg_volume(amp));
+}
+
+fn load_instrument_bank_for_arrangement(
+    repo: &Path,
+    arrangement_path: &Path,
+    arrangement: &VandArrangement,
+    explicit_bank_path: &str,
+) -> Result<HashMap<String, VandInstrument>, String> {
+    let arrangement_dir = arrangement_path.parent().unwrap_or_else(|| Path::new("."));
+    let bank_path = if !explicit_bank_path.is_empty() {
+        PathBuf::from(explicit_bank_path)
+    } else if !arrangement.instrument_bank.is_empty() {
+        resolve_existing_path(repo, arrangement_dir, &arrangement.instrument_bank)
+    } else {
+        repo.join(DEFAULT_INSTRUMENT_BANK)
+    };
+    let bank_dir = bank_path.parent().unwrap_or_else(|| Path::new("."));
+    let manifest = read_instrument_bank(&bank_path)?;
+    let mut instruments = HashMap::new();
+
+    for entry in manifest.instruments {
+        let instrument_path = resolve_existing_path(repo, bank_dir, &entry.file);
+        let instrument = read_instrument(&instrument_path)?;
+        instruments.insert(entry.id, instrument);
+    }
+
+    Ok(instruments)
+}
+
+fn render_arrangement_samples(
+    arrangement: &VandArrangement,
+    instruments: &HashMap<String, VandInstrument>,
+) -> Vec<i16> {
+    const RATE: u32 = 44_100;
+    let frame_samples = ((arrangement.hop as u64 * RATE as u64
+        + (arrangement.sample_rate / 2) as u64)
+        / arrangement.sample_rate.max(1) as u64)
+        .max(64) as usize;
+    let mut audio = Audio::new();
+    audio.reset();
+    audio.ym2612.write_register(0, 0x22, 0x00, None, true);
+    audio.ym2612.write_register(0, 0x27, 0x00, None, true);
+    psg_latch_volume(&mut audio, 3, 15);
+
+    let mut out = Vec::with_capacity(arrangement.events.len() * frame_samples);
+    let mut bass_id = String::new();
+    let mut lead_id = String::new();
+    let mut bass_on = false;
+    let mut lead_on = false;
+
+    for frame in &arrangement.events {
+        audio.begin_frame();
+
+        if frame.bass_hz > 0.0 && frame.bass_amp > 0.01 {
+            let next_bass_id = if frame.bass_instrument_id.is_empty() {
+                DEFAULT_BASS_INSTRUMENT
+            } else {
+                &frame.bass_instrument_id
+            };
+            if bass_id != next_bass_id {
+                bass_id = next_bass_id.to_string();
+                if let Some(instrument) = instruments.get(&bass_id) {
+                    write_fm_patch(
+                        &mut audio,
+                        instrument,
+                        0,
+                        amp_to_fm_attenuation(frame.bass_amp),
+                    );
+                }
+                bass_on = false;
+            } else if let Some(instrument) = instruments.get(&bass_id) {
+                write_fm_patch(
+                    &mut audio,
+                    instrument,
+                    0,
+                    amp_to_fm_attenuation(frame.bass_amp),
+                );
+            }
+            write_fm_pitch(&mut audio, 0, frame.bass_hz);
+            if !bass_on {
+                fm_key_on(&mut audio, 0, true);
+                bass_on = true;
+            }
+        } else if bass_on {
+            fm_key_on(&mut audio, 0, false);
+            bass_on = false;
+        }
+
+        if frame.lead_hz > 0.0 && frame.lead_amp > 0.01 {
+            let next_lead_id = if frame.lead_instrument_id.is_empty() {
+                DEFAULT_LEAD_INSTRUMENT
+            } else {
+                &frame.lead_instrument_id
+            };
+            if lead_id != next_lead_id {
+                lead_id = next_lead_id.to_string();
+                if let Some(instrument) = instruments.get(&lead_id) {
+                    write_fm_patch(
+                        &mut audio,
+                        instrument,
+                        1,
+                        amp_to_fm_attenuation(frame.lead_amp),
+                    );
+                }
+                lead_on = false;
+            } else if let Some(instrument) = instruments.get(&lead_id) {
+                write_fm_patch(
+                    &mut audio,
+                    instrument,
+                    1,
+                    amp_to_fm_attenuation(frame.lead_amp),
+                );
+            }
+            write_fm_pitch(&mut audio, 1, frame.lead_hz);
+            if !lead_on {
+                fm_key_on(&mut audio, 1, true);
+                lead_on = true;
+            }
+        } else if lead_on {
+            fm_key_on(&mut audio, 1, false);
+            lead_on = false;
+        }
+
+        let noise_amp = frame.noise_amp.max(frame.transient * 0.65);
+        let noise_id = if frame.noise_instrument_id.is_empty() {
+            DEFAULT_NOISE_INSTRUMENT
+        } else {
+            &frame.noise_instrument_id
+        };
+        if instruments.contains_key(noise_id) && noise_amp > 0.015 {
+            psg_set_noise(&mut audio, noise_amp);
+        } else {
+            psg_latch_volume(&mut audio, 3, 15);
+        }
+
+        out.extend(
+            audio
+                .render_frame_samples(frame_samples, RATE as usize)
+                .into_iter()
+                .map(|sample| (sample.clamp(-1.0, 1.0) * 32767.0) as i16),
+        );
+    }
+
+    if bass_on {
+        fm_key_on(&mut audio, 0, false);
+    }
+    if lead_on {
+        fm_key_on(&mut audio, 1, false);
+    }
+
+    out
 }
 
 fn parse_metric(log: &str, label: &str) -> u32 {
@@ -483,12 +746,27 @@ fn audio_data_url(path: String) -> Result<String, String> {
 #[tauri::command]
 fn instrument_preview_data_url(path: String) -> Result<String, String> {
     let path = PathBuf::from(path);
-    let text = fs::read_to_string(&path)
-        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-    let instrument: VandInstrument =
-        serde_json::from_str(&text).map_err(|err| format!("invalid instrument JSON: {err}"))?;
+    let instrument = read_instrument(&path)?;
     let samples = render_instrument_samples(&instrument);
     let preview = std::env::temp_dir().join("vand-ai-lism-instrument-preview.wav");
+    write_preview_wav(&preview, 44_100, &samples)?;
+    let bytes =
+        fs::read(&preview).map_err(|err| format!("failed to read {}: {err}", preview.display()))?;
+    Ok(format!("data:audio/wav;base64,{}", base64_encode(&bytes)))
+}
+
+#[tauri::command]
+fn arrangement_preview_data_url(path: String, bank_path: String) -> Result<String, String> {
+    let repo = repo_root()?;
+    let arrangement_path = PathBuf::from(path);
+    let text = fs::read_to_string(&arrangement_path)
+        .map_err(|err| format!("failed to read {}: {err}", arrangement_path.display()))?;
+    let arrangement: VandArrangement =
+        serde_json::from_str(&text).map_err(|err| format!("invalid arrangement JSON: {err}"))?;
+    let instruments =
+        load_instrument_bank_for_arrangement(&repo, &arrangement_path, &arrangement, &bank_path)?;
+    let samples = render_arrangement_samples(&arrangement, &instruments);
+    let preview = std::env::temp_dir().join("vand-ai-lism-arrangement-preview.wav");
     write_preview_wav(&preview, 44_100, &samples)?;
     let bytes =
         fs::read(&preview).map_err(|err| format!("failed to read {}: {err}", preview.display()))?;
@@ -506,8 +784,55 @@ fn main() {
             analyse_audio,
             import_instrument_dir,
             audio_data_url,
-            instrument_preview_data_url
+            instrument_preview_data_url,
+            arrangement_preview_data_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vand-AI-lism");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_arrangement_preview_with_core_bank() {
+        let repo = repo_root().expect("repo root");
+        let arrangement_path = repo.join("audio/converted/test-arrangement.vand-audio.json");
+        let arrangement = VandArrangement {
+            sample_rate: 44_100,
+            hop: 512,
+            instrument_bank: DEFAULT_INSTRUMENT_BANK.to_string(),
+            events: vec![
+                VandArrangementFrame {
+                    bass_hz: 110.0,
+                    bass_amp: 0.8,
+                    bass_instrument_id: DEFAULT_BASS_INSTRUMENT.to_string(),
+                    lead_hz: 220.0,
+                    lead_amp: 0.5,
+                    lead_instrument_id: DEFAULT_LEAD_INSTRUMENT.to_string(),
+                    noise_amp: 0.0,
+                    transient: 0.0,
+                    noise_instrument_id: String::new(),
+                },
+                VandArrangementFrame {
+                    bass_hz: 123.47,
+                    bass_amp: 0.7,
+                    bass_instrument_id: DEFAULT_BASS_INSTRUMENT.to_string(),
+                    lead_hz: 246.94,
+                    lead_amp: 0.4,
+                    lead_instrument_id: DEFAULT_LEAD_INSTRUMENT.to_string(),
+                    noise_amp: 0.2,
+                    transient: 0.1,
+                    noise_instrument_id: DEFAULT_NOISE_INSTRUMENT.to_string(),
+                },
+            ],
+        };
+        let instruments =
+            load_instrument_bank_for_arrangement(&repo, &arrangement_path, &arrangement, "")
+                .expect("core bank");
+        let samples = render_arrangement_samples(&arrangement, &instruments);
+        assert!(!samples.is_empty());
+        assert!(samples.iter().any(|sample| *sample != 0));
+    }
 }

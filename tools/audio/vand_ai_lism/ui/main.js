@@ -34,6 +34,7 @@ function setSummary(summary) {
   $("runtimeEvents").textContent = summary ? summary.runtime_events : "-";
   $("dacChunks").textContent = summary ? summary.dac_chunks : "-";
   $("loadDacBtn").disabled = !summary?.dac_preview;
+  $("loadArrangementBtn").disabled = !summary?.arrangement;
 
   if (!summary) {
     $("exportList").textContent = "No analysis yet.";
@@ -210,6 +211,22 @@ function loadDac() {
   loadPlayer("dacPlayer", state.summary.dac_preview, "DAC preview");
 }
 
+async function loadArrangement() {
+  if (!state.summary?.arrangement) return;
+  const player = $("arrangementPlayer");
+  setLog(`Rendering arrangement preview...\n${state.summary.arrangement}`);
+  try {
+    player.src = await invoke("arrangement_preview_data_url", {
+      path: state.summary.arrangement,
+      bankPath: state.bankPath || "",
+    });
+    await player.play();
+    setLog(`Playing arrangement preview:\n${state.summary.arrangement}`);
+  } catch (err) {
+    setLog(`Arrangement preview failed:\n${err}`);
+  }
+}
+
 $("openBtn").addEventListener("click", chooseAudio);
 $("outputBtn").addEventListener("click", chooseOutput);
 $("openBankBtn").addEventListener("click", openBank);
@@ -217,6 +234,7 @@ $("importBankBtn").addEventListener("click", importBank);
 $("analyseBtn").addEventListener("click", analyse);
 $("loadOriginalBtn").addEventListener("click", loadOriginal);
 $("loadDacBtn").addEventListener("click", loadDac);
+$("loadArrangementBtn").addEventListener("click", loadArrangement);
 $("previewInstrumentBtn").addEventListener("click", previewInstrument);
 
 setOutput(state.output);
