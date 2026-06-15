@@ -332,7 +332,7 @@ fn fm_key_on(audio: &mut Audio, channel: usize, on: bool) {
 
 fn amp_to_fm_attenuation(amp: f32) -> u8 {
     let amp = amp.clamp(0.0, 1.0);
-    ((1.0 - amp) * 48.0).round().clamp(0.0, 64.0) as u8
+    ((1.0 - amp) * 18.0).round().clamp(0.0, 28.0) as u8
 }
 
 fn amp_to_psg_volume(amp: f32) -> u8 {
@@ -388,6 +388,27 @@ fn render_instrument_samples(instrument: &VandInstrument) -> Vec<i16> {
         );
     }
     out
+}
+
+fn normalize_preview_samples(samples: &mut [i16], target_peak: i16) {
+    let peak = samples
+        .iter()
+        .map(|sample| i32::from(*sample).abs())
+        .max()
+        .unwrap_or(0);
+    if peak < 1 {
+        return;
+    }
+
+    let gain = f32::from(target_peak) / peak as f32;
+    if gain <= 1.0 {
+        return;
+    }
+
+    for sample in samples {
+        let value = (*sample as f32 * gain).round() as i32;
+        *sample = value.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    }
 }
 
 fn ym2612_pitch_for_hz(hz: f32) -> (u16, u8) {
@@ -747,7 +768,8 @@ fn audio_data_url(path: String) -> Result<String, String> {
 fn instrument_preview_data_url(path: String) -> Result<String, String> {
     let path = PathBuf::from(path);
     let instrument = read_instrument(&path)?;
-    let samples = render_instrument_samples(&instrument);
+    let mut samples = render_instrument_samples(&instrument);
+    normalize_preview_samples(&mut samples, 22_000);
     let preview = std::env::temp_dir().join("vand-ai-lism-instrument-preview.wav");
     write_preview_wav(&preview, 44_100, &samples)?;
     let bytes =
@@ -765,7 +787,8 @@ fn arrangement_preview_data_url(path: String, bank_path: String) -> Result<Strin
         serde_json::from_str(&text).map_err(|err| format!("invalid arrangement JSON: {err}"))?;
     let instruments =
         load_instrument_bank_for_arrangement(&repo, &arrangement_path, &arrangement, &bank_path)?;
-    let samples = render_arrangement_samples(&arrangement, &instruments);
+    let mut samples = render_arrangement_samples(&arrangement, &instruments);
+    normalize_preview_samples(&mut samples, 22_000);
     let preview = std::env::temp_dir().join("vand-ai-lism-arrangement-preview.wav");
     write_preview_wav(&preview, 44_100, &samples)?;
     let bytes =
@@ -831,8 +854,15 @@ mod tests {
         let instruments =
             load_instrument_bank_for_arrangement(&repo, &arrangement_path, &arrangement, "")
                 .expect("core bank");
-        let samples = render_arrangement_samples(&arrangement, &instruments);
+        let mut samples = render_arrangement_samples(&arrangement, &instruments);
         assert!(!samples.is_empty());
         assert!(samples.iter().any(|sample| *sample != 0));
+        normalize_preview_samples(&mut samples, 22_000);
+        let peak = samples
+            .iter()
+            .map(|sample| i32::from(*sample).abs())
+            .max()
+            .unwrap_or(0);
+        assert!(peak >= 18_000, "preview peak too low: {peak}");
     }
 }
