@@ -10,6 +10,11 @@ const DEFAULT_RATE: u32 = 44_100;
 const ANALYSIS_FRAME: usize = 1024;
 const ANALYSIS_HOP: usize = 512;
 const DAC_SAMPLE_RATE: u32 = 8_000;
+const DEFAULT_INSTRUMENT_BANK: &str =
+    "audio/instruments/vand_furnace_core/bank.vand-instruments.json";
+const DEFAULT_BASS_INSTRUMENT: &str = "growl_bass_wobbly";
+const DEFAULT_LEAD_INSTRUMENT: &str = "fm_grinder";
+const DEFAULT_NOISE_INSTRUMENT: &str = "psg_echo_warble";
 
 struct Args {
     command: CommandMode,
@@ -1735,6 +1740,7 @@ fn write_frame_track_json(
     track_name: &str,
     frames: &[AnalysisFrame],
     value_for_frame: impl Fn(&AnalysisFrame) -> (f32, f32),
+    instrument_for_frame: impl Fn(&AnalysisFrame, f32, f32) -> &'static str,
 ) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -1748,14 +1754,24 @@ fn write_frame_track_json(
         "  \"source\": \"{}\",\n",
         json_escape(&input.display().to_string())
     ));
+    out.push_str(&format!(
+        "  \"instrument_bank\": \"{}\",\n",
+        DEFAULT_INSTRUMENT_BANK
+    ));
     out.push_str(&format!("  \"hop\": {},\n", ANALYSIS_HOP));
     out.push_str("  \"frames\": [\n");
     for (i, frame) in frames.iter().enumerate() {
         let comma = if i + 1 == frames.len() { "" } else { "," };
         let (hz, amp) = value_for_frame(frame);
+        let instrument_id = instrument_for_frame(frame, hz, amp);
         out.push_str(&format!(
-            "    {{\"index\": {}, \"t\": {:.6}, \"hz\": {:.3}, \"amp\": {:.5}}}{}\n",
-            frame.index, frame.time, hz, amp, comma
+            "    {{\"index\": {}, \"t\": {:.6}, \"hz\": {:.3}, \"amp\": {:.5}, \"instrument_id\": \"{}\"}}{}\n",
+            frame.index,
+            frame.time,
+            hz,
+            amp,
+            instrument_id,
+            comma
         ));
     }
     out.push_str("  ]\n");
@@ -1770,6 +1786,13 @@ fn write_split_tracks(bundle_dir: &Path, input: &Path, frames: &[AnalysisFrame])
         "fm_bass",
         frames,
         |frame| (frame.bass_hz, frame.bass_amp),
+        |_frame, hz, amp| {
+            if hz > 0.0 && amp > 0.0 {
+                DEFAULT_BASS_INSTRUMENT
+            } else {
+                ""
+            }
+        },
     )?;
     write_frame_track_json(
         &bundle_dir.join("fm_lead.json"),
@@ -1777,6 +1800,13 @@ fn write_split_tracks(bundle_dir: &Path, input: &Path, frames: &[AnalysisFrame])
         "fm_lead",
         frames,
         |frame| (frame.lead_hz, frame.lead_amp),
+        |_frame, hz, amp| {
+            if hz > 0.0 && amp > 0.0 {
+                DEFAULT_LEAD_INSTRUMENT
+            } else {
+                ""
+            }
+        },
     )?;
     write_frame_track_json(
         &bundle_dir.join("psg_noise.json"),
@@ -1784,6 +1814,13 @@ fn write_split_tracks(bundle_dir: &Path, input: &Path, frames: &[AnalysisFrame])
         "psg_noise",
         frames,
         |frame| (0.0, frame.noise_amp.max(frame.transient * 0.65)),
+        |_frame, _hz, amp| {
+            if amp > 0.0 {
+                DEFAULT_NOISE_INSTRUMENT
+            } else {
+                ""
+            }
+        },
     )
 }
 
@@ -1983,6 +2020,10 @@ fn write_analysis_json(
     out.push_str(&format!("  \"duration\": {:.6},\n", duration));
     out.push_str(&format!("  \"frame_size\": {},\n", ANALYSIS_FRAME));
     out.push_str(&format!("  \"hop\": {},\n", ANALYSIS_HOP));
+    out.push_str(&format!(
+        "  \"instrument_bank\": \"{}\",\n",
+        DEFAULT_INSTRUMENT_BANK
+    ));
     out.push_str("  \"pipeline\": [\"audio_import_pcm16\", \"goertzel_pitch_tracking\", \"transient_detection\", \"frame_classification\", \"split_track_export\", \"dac_candidate_extraction\"],\n");
     out.push_str("  \"events\": [\n");
     for (i, frame) in frames.iter().enumerate() {
@@ -1991,9 +2032,9 @@ fn write_analysis_json(
             concat!(
                 "    {{\"index\": {}, \"t\": {:.6}, \"class\": \"{}\", ",
                 "\"rms\": {:.5}, \"transient\": {:.5}, ",
-                "\"bass_hz\": {:.3}, \"bass_note\": \"{}\", \"bass_amp\": {:.5}, ",
-                "\"lead_hz\": {:.3}, \"lead_note\": \"{}\", \"lead_amp\": {:.5}, ",
-                "\"noise_amp\": {:.5}}}{}\n"
+                "\"bass_hz\": {:.3}, \"bass_note\": \"{}\", \"bass_amp\": {:.5}, \"bass_instrument_id\": \"{}\", ",
+                "\"lead_hz\": {:.3}, \"lead_note\": \"{}\", \"lead_amp\": {:.5}, \"lead_instrument_id\": \"{}\", ",
+                "\"noise_amp\": {:.5}, \"noise_instrument_id\": \"{}\"}}{}\n"
             ),
             frame.index,
             frame.time,
@@ -2003,10 +2044,25 @@ fn write_analysis_json(
             frame.bass_hz,
             note_name(frame.bass_hz),
             frame.bass_amp,
+            if frame.bass_hz > 0.0 && frame.bass_amp > 0.0 {
+                DEFAULT_BASS_INSTRUMENT
+            } else {
+                ""
+            },
             frame.lead_hz,
             note_name(frame.lead_hz),
             frame.lead_amp,
+            if frame.lead_hz > 0.0 && frame.lead_amp > 0.0 {
+                DEFAULT_LEAD_INSTRUMENT
+            } else {
+                ""
+            },
             frame.noise_amp,
+            if frame.noise_amp.max(frame.transient * 0.65) > 0.0 {
+                DEFAULT_NOISE_INSTRUMENT
+            } else {
+                ""
+            },
             comma,
         ));
     }

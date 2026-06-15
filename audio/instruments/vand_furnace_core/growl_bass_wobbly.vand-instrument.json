@@ -1,0 +1,24 @@
+{
+  "format": "vandaler-instrument-v0",
+  "id": "growl_bass_wobbly",
+  "name": "Growl Bass (Wobbly)",
+  "chip": "ym2612",
+  "category": "bass",
+  "source": {
+    "kind": "furnace_fui",
+    "path": "https://raw.githubusercontent.com/tildearrow/furnace/master/instruments/OPN/bass/bass_growl_00_wobbly.fui",
+    "license_review": "furnace_instruments_readme_free_restrictions"
+  },
+  "furnace": { "format_version": 99, "instrument_type": 1, "features": ["OLD", "INST"] },
+  "fm": {
+    "algorithm": 0, "feedback": 4, "ams": 3, "fms": 0,
+    "operators": [
+      { "mult": 1, "tl": 32, "ar": 31, "dr": 5, "sr": 0, "sl": 7, "rr": 14, "dt": 5, "rs": 0, "am": 1, "ssg_eg": 0 },
+      { "mult": 0, "tl": 23, "ar": 31, "dr": 13, "sr": 0, "sl": 6, "rr": 14, "dt": 5, "rs": 0, "am": 0, "ssg_eg": 0 },
+      { "mult": 2, "tl": 23, "ar": 18, "dr": 11, "sr": 0, "sl": 8, "rr": 14, "dt": 0, "rs": 0, "am": 1, "ssg_eg": 0 },
+      { "mult": 0, "tl": 0, "ar": 31, "dr": 9, "sr": 0, "sl": 15, "rr": 14, "dt": 0, "rs": 0, "am": 0, "ssg_eg": 0 }
+    ]
+  },
+  "macros": [
+  ]
+}

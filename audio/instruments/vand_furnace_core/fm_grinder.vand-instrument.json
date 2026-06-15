@@ -1,0 +1,24 @@
+{
+  "format": "vandaler-instrument-v0",
+  "id": "fm_grinder",
+  "name": "fm grinder",
+  "chip": "ym2612",
+  "category": "lead",
+  "source": {
+    "kind": "furnace_fui",
+    "path": "https://raw.githubusercontent.com/tildearrow/furnace/master/instruments/OPN/synth/fm_grinder.fui",
+    "license_review": "furnace_instruments_readme_free_restrictions"
+  },
+  "furnace": { "format_version": 94, "instrument_type": 1, "features": ["OLD", "INST"] },
+  "fm": {
+    "algorithm": 2, "feedback": 7, "ams": 0, "fms": 0,
+    "operators": [
+      { "mult": 1, "tl": 15, "ar": 14, "dr": 14, "sr": 0, "sl": 1, "rr": 15, "dt": 3, "rs": 2, "am": 0, "ssg_eg": 0 },
+      { "mult": 1, "tl": 28, "ar": 13, "dr": 14, "sr": 0, "sl": 1, "rr": 15, "dt": 3, "rs": 2, "am": 0, "ssg_eg": 0 },
+      { "mult": 5, "tl": 30, "ar": 14, "dr": 14, "sr": 0, "sl": 15, "rr": 15, "dt": 3, "rs": 2, "am": 0, "ssg_eg": 0 },
+      { "mult": 1, "tl": 11, "ar": 19, "dr": 3, "sr": 0, "sl": 0, "rr": 15, "dt": 3, "rs": 1, "am": 0, "ssg_eg": 0 }
+    ]
+  },
+  "macros": [
+  ]
+}

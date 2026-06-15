@@ -1,0 +1,24 @@
+{
+  "format": "vandaler-instrument-v0",
+  "id": "growl",
+  "name": "Growl",
+  "chip": "ym2612",
+  "category": "lead",
+  "source": {
+    "kind": "furnace_fui",
+    "path": "https://raw.githubusercontent.com/tildearrow/furnace/master/instruments/OPN/synth/growl.fui",
+    "license_review": "furnace_instruments_readme_free_restrictions"
+  },
+  "furnace": { "format_version": 99, "instrument_type": 1, "features": ["OLD", "INST"] },
+  "fm": {
+    "algorithm": 2, "feedback": 0, "ams": 0, "fms": 0,
+    "operators": [
+      { "mult": 5, "tl": 127, "ar": 3, "dr": 8, "sr": 0, "sl": 15, "rr": 3, "dt": 5, "rs": 0, "am": 0, "ssg_eg": 0 },
+      { "mult": 1, "tl": 16, "ar": 4, "dr": 4, "sr": 0, "sl": 11, "rr": 3, "dt": 5, "rs": 0, "am": 0, "ssg_eg": 0 },
+      { "mult": 1, "tl": 22, "ar": 8, "dr": 0, "sr": 0, "sl": 15, "rr": 4, "dt": 0, "rs": 0, "am": 0, "ssg_eg": 0 },
+      { "mult": 1, "tl": 2, "ar": 10, "dr": 5, "sr": 0, "sl": 15, "rr": 4, "dt": 0, "rs": 0, "am": 0, "ssg_eg": 0 }
+    ]
+  },
+  "macros": [
+  ]
+}

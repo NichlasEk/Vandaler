@@ -1,0 +1,16 @@
+{
+  "format": "vandaler-instrument-v0",
+  "id": "octave_arp",
+  "name": "Octave Arp",
+  "chip": "sn76489",
+  "category": "psg",
+  "source": {
+    "kind": "furnace_fui",
+    "path": "https://raw.githubusercontent.com/tildearrow/furnace/master/instruments/SN7/Octave%20Arp.fui",
+    "license_review": "furnace_instruments_readme_free_restrictions"
+  },
+  "furnace": { "format_version": 99, "instrument_type": 0, "features": ["OLD", "INST"] },
+  "fm": null,
+  "macros": [
+  ]
+}

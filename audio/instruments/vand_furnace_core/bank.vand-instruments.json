@@ -1,0 +1,56 @@
+{
+  "format": "vandaler-instrument-bank-v0",
+  "source": "https://github.com/tildearrow/furnace/tree/master/instruments",
+  "license_review": "furnace_instruments_readme_free_restrictions",
+  "instrument_count": 6,
+  "instruments": [
+    {
+      "id": "growl_bass_wobbly",
+      "name": "Growl Bass (Wobbly)",
+      "chip": "ym2612",
+      "category": "bass",
+      "source": "https://raw.githubusercontent.com/tildearrow/furnace/master/instruments/OPN/bass/bass_growl_00_wobbly.fui",
+      "file": "audio/instruments/vand_furnace_core/growl_bass_wobbly.vand-instrument.json"
+    },
+    {
+      "id": "neatguitarmultialg_alt1",
+      "name": "neatguitarmultialg - alt1",
+      "chip": "ym2612",
+      "category": "bass",
+      "source": "https://raw.githubusercontent.com/tildearrow/furnace/master/instruments/OPN/bass/fm_bass1.fui",
+      "file": "audio/instruments/vand_furnace_core/neatguitarmultialg_alt1.vand-instrument.json"
+    },
+    {
+      "id": "fm_grinder",
+      "name": "fm grinder",
+      "chip": "ym2612",
+      "category": "lead",
+      "source": "https://raw.githubusercontent.com/tildearrow/furnace/master/instruments/OPN/synth/fm_grinder.fui",
+      "file": "audio/instruments/vand_furnace_core/fm_grinder.vand-instrument.json"
+    },
+    {
+      "id": "growl",
+      "name": "Growl",
+      "chip": "ym2612",
+      "category": "lead",
+      "source": "https://raw.githubusercontent.com/tildearrow/furnace/master/instruments/OPN/synth/growl.fui",
+      "file": "audio/instruments/vand_furnace_core/growl.vand-instrument.json"
+    },
+    {
+      "id": "psg_echo_warble",
+      "name": "PSG Echo Warble",
+      "chip": "sn76489",
+      "category": "psg",
+      "source": "https://raw.githubusercontent.com/tildearrow/furnace/master/instruments/SN7/Echo.fui",
+      "file": "audio/instruments/vand_furnace_core/psg_echo_warble.vand-instrument.json"
+    },
+    {
+      "id": "octave_arp",
+      "name": "Octave Arp",
+      "chip": "sn76489",
+      "category": "psg",
+      "source": "https://raw.githubusercontent.com/tildearrow/furnace/master/instruments/SN7/Octave%20Arp.fui",
+      "file": "audio/instruments/vand_furnace_core/octave_arp.vand-instrument.json"
+    }
+  ]
+}

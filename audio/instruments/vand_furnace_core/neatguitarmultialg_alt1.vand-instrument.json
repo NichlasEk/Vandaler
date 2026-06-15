@@ -1,0 +1,24 @@
+{
+  "format": "vandaler-instrument-v0",
+  "id": "neatguitarmultialg_alt1",
+  "name": "neatguitarmultialg - alt1",
+  "chip": "ym2612",
+  "category": "bass",
+  "source": {
+    "kind": "furnace_fui",
+    "path": "https://raw.githubusercontent.com/tildearrow/furnace/master/instruments/OPN/bass/fm_bass1.fui",
+    "license_review": "furnace_instruments_readme_free_restrictions"
+  },
+  "furnace": { "format_version": 94, "instrument_type": 1, "features": ["OLD", "INST"] },
+  "fm": {
+    "algorithm": 3, "feedback": 7, "ams": 0, "fms": 0,
+    "operators": [
+      { "mult": 2, "tl": 28, "ar": 31, "dr": 3, "sr": 0, "sl": 15, "rr": 9, "dt": 3, "rs": 2, "am": 0, "ssg_eg": 0 },
+      { "mult": 1, "tl": 23, "ar": 31, "dr": 3, "sr": 0, "sl": 15, "rr": 8, "dt": 3, "rs": 2, "am": 0, "ssg_eg": 0 },
+      { "mult": 2, "tl": 22, "ar": 31, "dr": 12, "sr": 13, "sl": 7, "rr": 7, "dt": 4, "rs": 0, "am": 0, "ssg_eg": 0 },
+      { "mult": 2, "tl": 12, "ar": 31, "dr": 3, "sr": 0, "sl": 15, "rr": 7, "dt": 3, "rs": 2, "am": 0, "ssg_eg": 0 }
+    ]
+  },
+  "macros": [
+  ]
+}

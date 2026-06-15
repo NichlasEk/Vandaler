@@ -70,6 +70,21 @@ folder, classify patches from folder names, and write a temporary
 known Furnace OPN/SN7 subsets, write attribution, and emit a stable bank under
 `audio/instruments/`.
 
+## Curated Core Bank
+
+The first stable bank lives at
+`audio/instruments/vand_furnace_core/bank.vand-instruments.json`. It contains
+six converted Furnace `.fui` patches:
+
+- YM2612 bass: `growl_bass_wobbly`, `neatguitarmultialg_alt1`
+- YM2612 lead: `fm_grinder`, `growl`
+- SN76489/PSG: `psg_echo_warble`, `octave_arp`
+
+Each generated instrument JSON keeps the original raw Furnace URL and the bank
+has an `ATTRIBUTION.md` file next to it. The current automatic arrangement pass
+uses `growl_bass_wobbly` for bass frames, `fm_grinder` for lead frames, and
+`psg_echo_warble` for noise/transient frames.
+
 ## Audio Pipeline Impact
 
 The current analyser maps detected bass and lead notes to generic runtime
@@ -84,3 +99,9 @@ working. The next musical step is to let analysis events carry an instrument id:
 The GUI should then preview the generated arrangement through the same event
 stream and instrument bank that the ROM uses. DAC preview alone is only a sample
 extract preview and will not match the in-game arrangement.
+
+Status: the JSON exports now carry `instrument_bank` plus per-frame
+`bass_instrument_id`, `lead_instrument_id`, `noise_instrument_id`, and split
+track `instrument_id` fields. The SGDK binary/runtime event format still uses
+the old hardcoded voices; the next runtime step is to load these IDs into a
+deterministic YM/PSG patch switcher.
