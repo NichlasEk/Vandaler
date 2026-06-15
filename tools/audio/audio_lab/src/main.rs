@@ -29,12 +29,14 @@ enum CommandMode {
     RenderRom,
     TestRom,
     AnalyseWav,
+    InspectInstrument,
+    ImportInstrument,
     Gui,
 }
 
 fn usage() {
     eprintln!(
-        "usage:\n  vandaler-audio-lab gui\n  vandaler-audio-lab analyse-audio input.mp3|input.ogg|input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play] [--start-malmo]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
+        "usage:\n  vandaler-audio-lab gui\n  vandaler-audio-lab analyse-audio input.mp3|input.ogg|input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab inspect-instrument instrument.fui\n  vandaler-audio-lab import-instrument instrument.fui [--out audio/instruments/imported/name.vand-instrument.json]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play] [--start-malmo]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
     );
 }
 
@@ -56,6 +58,12 @@ fn parse_args() -> io::Result<Args> {
             "render-rom" if command.is_none() => command = Some(CommandMode::RenderRom),
             "analyse-audio" | "analyse-wav" if command.is_none() => {
                 command = Some(CommandMode::AnalyseWav)
+            }
+            "inspect-instrument" if command.is_none() => {
+                command = Some(CommandMode::InspectInstrument)
+            }
+            "import-instrument" if command.is_none() => {
+                command = Some(CommandMode::ImportInstrument)
             }
             "gui" if command.is_none() => command = Some(CommandMode::Gui),
             "test-rom" if command.is_none() => {
@@ -125,7 +133,14 @@ fn parse_args() -> io::Result<Args> {
     }
 
     let command = command.unwrap_or(CommandMode::RenderRom);
-    if matches!(command, CommandMode::RenderRom | CommandMode::AnalyseWav) && rom.is_none() {
+    if matches!(
+        command,
+        CommandMode::RenderRom
+            | CommandMode::AnalyseWav
+            | CommandMode::InspectInstrument
+            | CommandMode::ImportInstrument
+    ) && rom.is_none()
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "missing input path",
@@ -415,6 +430,481 @@ fn read_u16_le(bytes: &[u8]) -> u16 {
 
 fn read_u32_le(bytes: &[u8]) -> u32 {
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+#[derive(Clone)]
+struct FmOperatorPatch {
+    mult: u8,
+    total_level: u8,
+    attack_rate: u8,
+    decay_rate: u8,
+    sustain_rate: u8,
+    sustain_level: u8,
+    release_rate: u8,
+    detune: u8,
+    rate_scale: u8,
+    amp_mod: u8,
+    ssg_eg: u8,
+}
+
+struct FmPatch {
+    algorithm: u8,
+    feedback: u8,
+    ams: u8,
+    fms: u8,
+    operators: Vec<FmOperatorPatch>,
+}
+
+struct MacroSummary {
+    code: u8,
+    length: u8,
+    loop_at: u8,
+    release_at: u8,
+    mode: u8,
+    word_size: u8,
+}
+
+struct FurnaceInstrument {
+    path: PathBuf,
+    format_version: u16,
+    instrument_type: u16,
+    name: String,
+    fm: Option<FmPatch>,
+    macros: Vec<MacroSummary>,
+    feature_codes: Vec<String>,
+}
+
+fn instrument_type_name(kind: u16) -> &'static str {
+    match kind {
+        0 => "SN76489",
+        1 => "FM OPN/YM2612",
+        _ => "other",
+    }
+}
+
+fn chip_name(kind: u16) -> &'static str {
+    match kind {
+        0 => "sn76489",
+        1 => "ym2612",
+        _ => "unknown",
+    }
+}
+
+fn read_c_string(bytes: &[u8]) -> String {
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).trim().to_string()
+}
+
+fn parse_furnace_fm(data: &[u8]) -> io::Result<FmPatch> {
+    if data.len() < 5 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "short Furnace FM feature",
+        ));
+    }
+
+    let flags = data[0];
+    let op_count = (flags & 0x0f).clamp(0, 4) as usize;
+    let algorithm_feedback = data[1];
+    let lfo = data[2];
+    let mut offset = 5usize;
+    let mut operators = Vec::new();
+
+    for _ in 0..op_count {
+        if offset + 8 > data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "truncated Furnace FM operator",
+            ));
+        }
+        let op = &data[offset..offset + 8];
+        operators.push(FmOperatorPatch {
+            mult: op[0] & 0x0f,
+            total_level: op[1] & 0x7f,
+            attack_rate: op[2] & 0x1f,
+            decay_rate: op[3] & 0x1f,
+            sustain_rate: op[4] & 0x1f,
+            sustain_level: (op[5] >> 4) & 0x0f,
+            release_rate: op[5] & 0x0f,
+            detune: (op[0] >> 4) & 0x07,
+            rate_scale: (op[2] >> 6) & 0x03,
+            amp_mod: (op[3] >> 7) & 0x01,
+            ssg_eg: op[6] & 0x0f,
+        });
+        offset += 8;
+    }
+
+    Ok(FmPatch {
+        algorithm: (algorithm_feedback >> 4) & 0x07,
+        feedback: algorithm_feedback & 0x07,
+        ams: (lfo >> 3) & 0x03,
+        fms: (lfo & 0x07) | ((lfo >> 5) & 0x18),
+        operators,
+    })
+}
+
+fn parse_furnace_macros(data: &[u8]) -> Vec<MacroSummary> {
+    if data.len() < 2 {
+        return Vec::new();
+    }
+    let header_len = read_u16_le(&data[0..2]) as usize;
+    let mut offset = 2usize.saturating_add(header_len);
+    if offset > data.len() {
+        offset = 2;
+    }
+
+    let mut macros = Vec::new();
+    while offset < data.len() {
+        let code = data[offset];
+        offset += 1;
+        if code == 255 {
+            break;
+        }
+        if offset + 6 > data.len() {
+            break;
+        }
+        let length = data[offset];
+        let loop_at = data[offset + 1];
+        let release_at = data[offset + 2];
+        let mode = data[offset + 3];
+        let type_word = data[offset + 4];
+        let word_size_code = (type_word >> 6) & 0x03;
+        let word_size = match word_size_code {
+            0 | 1 => 1,
+            2 => 2,
+            _ => 4,
+        };
+        offset += 6;
+        let data_len = length as usize * word_size as usize;
+        if offset + data_len > data.len() {
+            break;
+        }
+        offset += data_len;
+        macros.push(MacroSummary {
+            code,
+            length,
+            loop_at,
+            release_at,
+            mode,
+            word_size,
+        });
+    }
+    macros
+}
+
+fn parse_old_furnace_instrument(path: &Path, data: &[u8]) -> io::Result<FurnaceInstrument> {
+    if data.len() < 32 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "short old Furnace instrument header",
+        ));
+    }
+
+    let format_version = read_u16_le(&data[16..18]);
+    let instrument_ptr = read_u32_le(&data[20..24]) as usize;
+    if instrument_ptr + 12 > data.len() || &data[instrument_ptr..instrument_ptr + 4] != b"INST" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "old Furnace instrument is missing INST block",
+        ));
+    }
+
+    let block_size = read_u32_le(&data[instrument_ptr + 4..instrument_ptr + 8]) as usize;
+    let block_end = if block_size == 0 {
+        data.len()
+    } else {
+        (instrument_ptr + 8 + block_size).min(data.len())
+    };
+    let block = &data[instrument_ptr..block_end];
+    if block.len() < 12 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "short old Furnace INST block",
+        ));
+    }
+
+    let instrument_type = block[10] as u16;
+    let name_start = 12usize;
+    let name_end = block[name_start..]
+        .iter()
+        .position(|byte| *byte == 0)
+        .map(|pos| name_start + pos)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing instrument name"))?;
+    let name = read_c_string(&block[name_start..name_end]);
+    let fm_start = name_end + 1;
+    let fm = if instrument_type == 1 && fm_start + 8 + (4 * 32) <= block.len() {
+        let header = &block[fm_start..fm_start + 8];
+        let mut operators = Vec::new();
+        let mut offset = fm_start + 8;
+        for _ in 0..4 {
+            let op = &block[offset..offset + 32];
+            operators.push(FmOperatorPatch {
+                amp_mod: op[0],
+                attack_rate: op[1],
+                decay_rate: op[2],
+                mult: op[3],
+                release_rate: op[4],
+                sustain_level: op[5],
+                total_level: op[6],
+                detune: op[9],
+                sustain_rate: op[10],
+                ssg_eg: op[11],
+                rate_scale: op[8],
+            });
+            offset += 32;
+        }
+        Some(FmPatch {
+            algorithm: header[0],
+            feedback: header[1],
+            fms: header[2],
+            ams: header[3],
+            operators,
+        })
+    } else {
+        None
+    };
+
+    Ok(FurnaceInstrument {
+        path: path.to_path_buf(),
+        format_version,
+        instrument_type,
+        name,
+        fm,
+        macros: Vec::new(),
+        feature_codes: vec!["OLD".to_string(), "INST".to_string()],
+    })
+}
+
+fn parse_furnace_instrument(path: &Path) -> io::Result<FurnaceInstrument> {
+    let mut data = Vec::new();
+    File::open(path)?.read_to_end(&mut data)?;
+    if data.len() >= 16 && &data[0..16] == b"-Furnace instr.-" {
+        return parse_old_furnace_instrument(path, &data);
+    }
+    if data.len() < 8 || &data[0..4] != b"FINS" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "expected Furnace .fui FINS or old -Furnace instr.- header",
+        ));
+    }
+
+    let format_version = read_u16_le(&data[4..6]);
+    let instrument_type = read_u16_le(&data[6..8]);
+    let mut offset = 8usize;
+    let mut name = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("instrument")
+        .to_string();
+    let mut fm = None;
+    let mut macros = Vec::new();
+    let mut feature_codes = Vec::new();
+
+    while offset + 4 <= data.len() {
+        let code_bytes = [data[offset], data[offset + 1]];
+        let code = String::from_utf8_lossy(&code_bytes).to_string();
+        let len = read_u16_le(&data[offset + 2..offset + 4]) as usize;
+        offset += 4;
+        if offset + len > data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("truncated Furnace feature {code}"),
+            ));
+        }
+        let block = &data[offset..offset + len];
+        offset += len;
+        feature_codes.push(code.clone());
+
+        match code.as_str() {
+            "EN" => break,
+            "NA" => {
+                let parsed = read_c_string(block);
+                if !parsed.is_empty() {
+                    name = parsed;
+                }
+            }
+            "FM" => fm = Some(parse_furnace_fm(block)?),
+            "MA" => macros.extend(parse_furnace_macros(block)),
+            _ => {}
+        }
+    }
+
+    Ok(FurnaceInstrument {
+        path: path.to_path_buf(),
+        format_version,
+        instrument_type,
+        name,
+        fm,
+        macros,
+        feature_codes,
+    })
+}
+
+fn write_furnace_instrument_json(path: &Path, instrument: &FurnaceInstrument) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut text = String::new();
+    text.push_str("{\n");
+    text.push_str("  \"format\": \"vandaler-instrument-v0\",\n");
+    text.push_str(&format!(
+        "  \"id\": \"{}\",\n",
+        json_escape(
+            &instrument
+                .name
+                .to_lowercase()
+                .replace(|ch: char| !ch.is_ascii_alphanumeric(), "_")
+        )
+    ));
+    text.push_str(&format!(
+        "  \"name\": \"{}\",\n",
+        json_escape(&instrument.name)
+    ));
+    text.push_str(&format!(
+        "  \"chip\": \"{}\",\n",
+        chip_name(instrument.instrument_type)
+    ));
+    text.push_str("  \"category\": \"uncurated\",\n");
+    text.push_str("  \"source\": {\n");
+    text.push_str("    \"kind\": \"furnace_fui\",\n");
+    text.push_str(&format!(
+        "    \"path\": \"{}\",\n",
+        json_escape(&instrument.path.display().to_string())
+    ));
+    text.push_str("    \"license_review\": \"pending_curated_import\"\n");
+    text.push_str("  },\n");
+    text.push_str(&format!(
+        "  \"furnace\": {{ \"format_version\": {}, \"instrument_type\": {}, \"features\": [",
+        instrument.format_version, instrument.instrument_type
+    ));
+    for (i, code) in instrument.feature_codes.iter().enumerate() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(&format!("\"{}\"", json_escape(code)));
+    }
+    text.push_str("] },\n");
+
+    if let Some(fm) = &instrument.fm {
+        text.push_str("  \"fm\": {\n");
+        text.push_str(&format!(
+            "    \"algorithm\": {}, \"feedback\": {}, \"ams\": {}, \"fms\": {},\n",
+            fm.algorithm, fm.feedback, fm.ams, fm.fms
+        ));
+        text.push_str("    \"operators\": [\n");
+        for (i, op) in fm.operators.iter().enumerate() {
+            let comma = if i + 1 == fm.operators.len() { "" } else { "," };
+            text.push_str(&format!(
+                "      {{ \"mult\": {}, \"tl\": {}, \"ar\": {}, \"dr\": {}, \"sr\": {}, \"sl\": {}, \"rr\": {}, \"dt\": {}, \"rs\": {}, \"am\": {}, \"ssg_eg\": {} }}{}\n",
+                op.mult,
+                op.total_level,
+                op.attack_rate,
+                op.decay_rate,
+                op.sustain_rate,
+                op.sustain_level,
+                op.release_rate,
+                op.detune,
+                op.rate_scale,
+                op.amp_mod,
+                op.ssg_eg,
+                comma
+            ));
+        }
+        text.push_str("    ]\n");
+        text.push_str("  },\n");
+    } else {
+        text.push_str("  \"fm\": null,\n");
+    }
+
+    text.push_str("  \"macros\": [\n");
+    for (i, item) in instrument.macros.iter().enumerate() {
+        let comma = if i + 1 == instrument.macros.len() {
+            ""
+        } else {
+            ","
+        };
+        text.push_str(&format!(
+            "    {{ \"code\": {}, \"length\": {}, \"loop\": {}, \"release\": {}, \"mode\": {}, \"word_size\": {} }}{}\n",
+            item.code, item.length, item.loop_at, item.release_at, item.mode, item.word_size, comma
+        ));
+    }
+    text.push_str("  ]\n");
+    text.push_str("}\n");
+    std::fs::write(path, text)
+}
+
+fn inspect_instrument(args: &Args) -> io::Result<()> {
+    let input = args
+        .rom
+        .as_deref()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing instrument path"))?;
+    let instrument = parse_furnace_instrument(input)?;
+    println!(
+        "{} | Furnace v{} | type {} ({}) | features {}",
+        instrument.name,
+        instrument.format_version,
+        instrument.instrument_type,
+        instrument_type_name(instrument.instrument_type),
+        instrument.feature_codes.join(",")
+    );
+    if let Some(fm) = &instrument.fm {
+        println!(
+            "FM alg={} feedback={} ams={} fms={} operators={}",
+            fm.algorithm,
+            fm.feedback,
+            fm.ams,
+            fm.fms,
+            fm.operators.len()
+        );
+        for (i, op) in fm.operators.iter().enumerate() {
+            println!(
+                "  op{} mult={} tl={} ar={} dr={} sr={} sl={} rr={} dt={} rs={} am={} ssg={}",
+                i + 1,
+                op.mult,
+                op.total_level,
+                op.attack_rate,
+                op.decay_rate,
+                op.sustain_rate,
+                op.sustain_level,
+                op.release_rate,
+                op.detune,
+                op.rate_scale,
+                op.amp_mod,
+                op.ssg_eg
+            );
+        }
+    }
+    if !instrument.macros.is_empty() {
+        println!("macros={}", instrument.macros.len());
+    }
+    Ok(())
+}
+
+fn import_instrument(args: &Args) -> io::Result<()> {
+    let input = args
+        .rom
+        .as_deref()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing instrument path"))?;
+    let instrument = parse_furnace_instrument(input)?;
+    let out = args.out.clone().unwrap_or_else(|| {
+        let stem = input
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("instrument");
+        PathBuf::from("audio/instruments/imported").join(format!("{stem}.vand-instrument.json"))
+    });
+    write_furnace_instrument_json(&out, &instrument)?;
+    println!(
+        "imported {} ({}) to {}",
+        instrument.name,
+        chip_name(instrument.instrument_type),
+        out.display()
+    );
+    Ok(())
 }
 
 fn read_wav_mono(path: &Path) -> io::Result<WavData> {
@@ -1550,6 +2040,8 @@ fn run() -> io::Result<()> {
     match args.command {
         CommandMode::AnalyseWav => analyse_wav(&args),
         CommandMode::Gui => launch_gui(),
+        CommandMode::ImportInstrument => import_instrument(&args),
+        CommandMode::InspectInstrument => inspect_instrument(&args),
         CommandMode::RenderRom => render_rom(&args),
         CommandMode::TestRom => test_rom(&args),
     }

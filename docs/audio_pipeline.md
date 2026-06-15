@@ -33,6 +33,8 @@ cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- render-rom out/aud
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-audio path/to/song.ogg --out audio/converted/song.vand-audio/arrangement.vand-audio.json
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-wav out/audio-test.wav --out out/audio-test-analysis.vand-audio.json
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-audio out/audio-test.wav --out audio/converted/audio-test.vand-audio/arrangement.vand-audio.json --install-sgdk
+cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- inspect-instrument /tmp/patch.fui
+cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- import-instrument /tmp/patch.fui
 make audio-test-generated
 make audio-generated-loop
 ```
@@ -99,6 +101,14 @@ its first host backend. `render-rom` loads a ROM, runs frames, renders stereo
 i16 audio, writes a WAV and JSON report, and can hand it to PipeWire with
 `--play`. `test-rom` builds the SGDK audio test ROM first and then renders it
 headlessly through the same backend.
+
+`inspect-instrument` and `import-instrument` are the first instrument-bank
+utilities. They currently read Furnace `.fui` files, parse `NA`, `FM` and `MA`
+features, print YM2612/PSG summaries, and export a neutral
+`vandaler-instrument-v0` JSON file. Imported patches are marked
+`pending_curated_import` until their source and attribution have been reviewed.
+See `docs/megadrive_instrument_research.md` for the research notes and the
+curation policy.
 
 `gui` starts the first Rust-side lab UI under the title `Vand-AI-lism`. It is
 currently a dependency-light terminal UI with commands to select an audio file,
