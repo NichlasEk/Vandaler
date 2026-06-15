@@ -35,6 +35,7 @@ cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-wav out/au
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-audio out/audio-test.wav --out audio/converted/audio-test.vand-audio/arrangement.vand-audio.json --install-sgdk
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- inspect-instrument /tmp/patch.fui
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- import-instrument /tmp/patch.fui
+cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- import-instrument-dir /tmp/furnace/instruments/OPN/bass --out /tmp/vand-bass-bank
 make audio-test-generated
 make audio-generated-loop
 ```
@@ -109,6 +110,13 @@ features, print YM2612/PSG summaries, and export a neutral
 `pending_curated_import` until their source and attribution have been reviewed.
 See `docs/megadrive_instrument_research.md` for the research notes and the
 curation policy.
+
+`import-instrument-dir` recursively imports Furnace `.fui` files from a folder,
+derives a provisional category from folder names such as `bass`, `synth`,
+`drums`, `percussion` or `SN7`, writes one `*.vand-instrument.json` per patch,
+and creates `bank.vand-instruments.json` as a GUI-friendly manifest. This is
+intended for local or `/tmp` exploration first; committed banks should still be
+curated with source and license review.
 
 `gui` starts the first Rust-side lab UI under the title `Vand-AI-lism`. It is
 currently a dependency-light terminal UI with commands to select an audio file,

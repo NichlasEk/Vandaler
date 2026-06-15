@@ -31,12 +31,13 @@ enum CommandMode {
     AnalyseWav,
     InspectInstrument,
     ImportInstrument,
+    ImportInstrumentDir,
     Gui,
 }
 
 fn usage() {
     eprintln!(
-        "usage:\n  vandaler-audio-lab gui\n  vandaler-audio-lab analyse-audio input.mp3|input.ogg|input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab inspect-instrument instrument.fui\n  vandaler-audio-lab import-instrument instrument.fui [--out audio/instruments/imported/name.vand-instrument.json]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play] [--start-malmo]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
+        "usage:\n  vandaler-audio-lab gui\n  vandaler-audio-lab analyse-audio input.mp3|input.ogg|input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab analyse-wav input.wav [--out arrangement.vand-audio.json] [--install-sgdk]\n  vandaler-audio-lab inspect-instrument instrument.fui\n  vandaler-audio-lab import-instrument instrument.fui [--out audio/instruments/imported/name.vand-instrument.json]\n  vandaler-audio-lab import-instrument-dir instruments/OPN/bass [--out audio/instruments/imported]\n  vandaler-audio-lab render-rom ROM [--wav out.wav] [--report report.json] [--seconds N] [--rate HZ] [--play] [--start-malmo]\n  vandaler-audio-lab test-rom [--wav out/audio-test.wav] [--report out/audio-test-report.json] [--seconds N] [--rate HZ] [--play]"
     );
 }
 
@@ -64,6 +65,9 @@ fn parse_args() -> io::Result<Args> {
             }
             "import-instrument" if command.is_none() => {
                 command = Some(CommandMode::ImportInstrument)
+            }
+            "import-instrument-dir" if command.is_none() => {
+                command = Some(CommandMode::ImportInstrumentDir)
             }
             "gui" if command.is_none() => command = Some(CommandMode::Gui),
             "test-rom" if command.is_none() => {
@@ -139,6 +143,7 @@ fn parse_args() -> io::Result<Args> {
             | CommandMode::AnalyseWav
             | CommandMode::InspectInstrument
             | CommandMode::ImportInstrument
+            | CommandMode::ImportInstrumentDir
     ) && rom.is_none()
     {
         return Err(io::Error::new(
@@ -474,6 +479,15 @@ struct FurnaceInstrument {
     feature_codes: Vec<String>,
 }
 
+struct ImportedInstrumentRecord {
+    id: String,
+    name: String,
+    chip: String,
+    category: String,
+    source: PathBuf,
+    output: PathBuf,
+}
+
 fn instrument_type_name(kind: u16) -> &'static str {
     match kind {
         0 => "SN76489",
@@ -488,6 +502,54 @@ fn chip_name(kind: u16) -> &'static str {
         1 => "ym2612",
         _ => "unknown",
     }
+}
+
+fn sanitize_id(input: &str) -> String {
+    let mut out = String::new();
+    let mut previous_was_separator = false;
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            out.push('_');
+            previous_was_separator = true;
+        }
+    }
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "instrument".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn category_from_path(path: &Path) -> String {
+    let mut parts = path
+        .parent()
+        .into_iter()
+        .flat_map(|parent| parent.components())
+        .filter_map(|component| component.as_os_str().to_str())
+        .map(|part| part.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    parts.reverse();
+
+    for part in parts {
+        match part.as_str() {
+            "bass" => return "bass".to_string(),
+            "drums" | "percussion" | "smsperc" => return "drum".to_string(),
+            "effect" | "effects" | "sfx" => return "sfx".to_string(),
+            "guitar" => return "guitar".to_string(),
+            "horn" | "wind" => return "lead".to_string(),
+            "keys" => return "keys".to_string(),
+            "strings" => return "pad".to_string(),
+            "synth" => return "lead".to_string(),
+            "sn7" => return "psg".to_string(),
+            "opn" => return "fm".to_string(),
+            _ => {}
+        }
+    }
+    "uncurated".to_string()
 }
 
 fn read_c_string(bytes: &[u8]) -> String {
@@ -743,7 +805,11 @@ fn parse_furnace_instrument(path: &Path) -> io::Result<FurnaceInstrument> {
     })
 }
 
-fn write_furnace_instrument_json(path: &Path, instrument: &FurnaceInstrument) -> io::Result<()> {
+fn write_furnace_instrument_json(
+    path: &Path,
+    instrument: &FurnaceInstrument,
+    category: &str,
+) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -753,12 +819,7 @@ fn write_furnace_instrument_json(path: &Path, instrument: &FurnaceInstrument) ->
     text.push_str("  \"format\": \"vandaler-instrument-v0\",\n");
     text.push_str(&format!(
         "  \"id\": \"{}\",\n",
-        json_escape(
-            &instrument
-                .name
-                .to_lowercase()
-                .replace(|ch: char| !ch.is_ascii_alphanumeric(), "_")
-        )
+        json_escape(&sanitize_id(&instrument.name))
     ));
     text.push_str(&format!(
         "  \"name\": \"{}\",\n",
@@ -768,7 +829,7 @@ fn write_furnace_instrument_json(path: &Path, instrument: &FurnaceInstrument) ->
         "  \"chip\": \"{}\",\n",
         chip_name(instrument.instrument_type)
     ));
-    text.push_str("  \"category\": \"uncurated\",\n");
+    text.push_str(&format!("  \"category\": \"{}\",\n", json_escape(category)));
     text.push_str("  \"source\": {\n");
     text.push_str("    \"kind\": \"furnace_fui\",\n");
     text.push_str(&format!(
@@ -897,12 +958,164 @@ fn import_instrument(args: &Args) -> io::Result<()> {
             .unwrap_or("instrument");
         PathBuf::from("audio/instruments/imported").join(format!("{stem}.vand-instrument.json"))
     });
-    write_furnace_instrument_json(&out, &instrument)?;
+    let category = category_from_path(input);
+    write_furnace_instrument_json(&out, &instrument, &category)?;
     println!(
-        "imported {} ({}) to {}",
+        "imported {} ({}, {}) to {}",
         instrument.name,
         chip_name(instrument.instrument_type),
+        category,
         out.display()
+    );
+    Ok(())
+}
+
+fn collect_fui_files(root: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_fui_files(&path, out)?;
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("fui"))
+        {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn unique_output_path(base: &Path, id: &str, used_ids: &mut Vec<String>) -> PathBuf {
+    let mut candidate = id.to_string();
+    let mut suffix = 2usize;
+    while used_ids.iter().any(|used| used == &candidate) {
+        candidate = format!("{id}_{suffix}");
+        suffix += 1;
+    }
+    used_ids.push(candidate.clone());
+    base.join(format!("{candidate}.vand-instrument.json"))
+}
+
+fn write_instrument_bank_manifest(
+    path: &Path,
+    source_dir: &Path,
+    records: &[ImportedInstrumentRecord],
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut text = String::new();
+    text.push_str("{\n");
+    text.push_str("  \"format\": \"vandaler-instrument-bank-v0\",\n");
+    text.push_str(&format!(
+        "  \"source_dir\": \"{}\",\n",
+        json_escape(&source_dir.display().to_string())
+    ));
+    text.push_str("  \"license_review\": \"pending_curated_import\",\n");
+    text.push_str(&format!("  \"instrument_count\": {},\n", records.len()));
+    text.push_str("  \"instruments\": [\n");
+    for (i, record) in records.iter().enumerate() {
+        let comma = if i + 1 == records.len() { "" } else { "," };
+        text.push_str("    {\n");
+        text.push_str(&format!("      \"id\": \"{}\",\n", json_escape(&record.id)));
+        text.push_str(&format!(
+            "      \"name\": \"{}\",\n",
+            json_escape(&record.name)
+        ));
+        text.push_str(&format!(
+            "      \"chip\": \"{}\",\n",
+            json_escape(&record.chip)
+        ));
+        text.push_str(&format!(
+            "      \"category\": \"{}\",\n",
+            json_escape(&record.category)
+        ));
+        text.push_str(&format!(
+            "      \"source\": \"{}\",\n",
+            json_escape(&record.source.display().to_string())
+        ));
+        text.push_str(&format!(
+            "      \"file\": \"{}\"\n",
+            json_escape(&record.output.display().to_string())
+        ));
+        text.push_str(&format!("    }}{}\n", comma));
+    }
+    text.push_str("  ]\n");
+    text.push_str("}\n");
+    std::fs::write(path, text)
+}
+
+fn import_instrument_dir(args: &Args) -> io::Result<()> {
+    let input = args.rom.as_deref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "missing instrument directory path",
+        )
+    })?;
+    if !input.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "import-instrument-dir needs a directory",
+        ));
+    }
+
+    let out_dir = args.out.clone().unwrap_or_else(|| {
+        let name = input
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("bank");
+        PathBuf::from("audio/instruments/imported").join(sanitize_id(name))
+    });
+    std::fs::create_dir_all(&out_dir)?;
+
+    let mut files = Vec::new();
+    collect_fui_files(input, &mut files)?;
+    files.sort();
+
+    let mut used_ids = Vec::new();
+    let mut records = Vec::new();
+    let mut skipped = 0usize;
+    for file in files {
+        match parse_furnace_instrument(&file) {
+            Ok(instrument) => {
+                let category = category_from_path(&file);
+                let id = sanitize_id(&instrument.name);
+                let output = unique_output_path(&out_dir, &id, &mut used_ids);
+                write_furnace_instrument_json(&output, &instrument, &category)?;
+                records.push(ImportedInstrumentRecord {
+                    id: output
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or(&id)
+                        .trim_end_matches(".vand-instrument")
+                        .to_string(),
+                    name: instrument.name,
+                    chip: chip_name(instrument.instrument_type).to_string(),
+                    category,
+                    source: file,
+                    output,
+                });
+            }
+            Err(err) => {
+                skipped += 1;
+                eprintln!("skipped {}: {err}", file.display());
+            }
+        }
+    }
+
+    let manifest = out_dir.join("bank.vand-instruments.json");
+    write_instrument_bank_manifest(&manifest, input, &records)?;
+    println!(
+        "imported {} instruments to {} | skipped {} | manifest {}",
+        records.len(),
+        out_dir.display(),
+        skipped,
+        manifest.display()
     );
     Ok(())
 }
@@ -2040,6 +2253,7 @@ fn run() -> io::Result<()> {
     match args.command {
         CommandMode::AnalyseWav => analyse_wav(&args),
         CommandMode::Gui => launch_gui(),
+        CommandMode::ImportInstrumentDir => import_instrument_dir(&args),
         CommandMode::ImportInstrument => import_instrument(&args),
         CommandMode::InspectInstrument => inspect_instrument(&args),
         CommandMode::RenderRom => render_rom(&args),

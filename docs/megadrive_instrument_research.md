@@ -60,12 +60,15 @@ First milestone:
 ```sh
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- inspect-instrument /tmp/patch.fui
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- import-instrument /tmp/patch.fui
+cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- import-instrument-dir /tmp/furnace/instruments/OPN/bass --out /tmp/vand-bass-bank
 ```
 
 This only imports one Furnace `.fui` at a time and marks it
-`pending_curated_import`. A later curator command should download known Furnace
-OPN/SN7 subsets, classify them by folder, write attribution, and emit a stable
-bank under `audio/instruments/`.
+`pending_curated_import`. `import-instrument-dir` can scan a local Furnace
+folder, classify patches from folder names, and write a temporary
+`bank.vand-instruments.json` manifest. A later curator command should download
+known Furnace OPN/SN7 subsets, write attribution, and emit a stable bank under
+`audio/instruments/`.
 
 ## Audio Pipeline Impact
 
