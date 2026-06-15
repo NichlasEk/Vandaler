@@ -1,3 +1,4 @@
+use euther_oxide::audio::Audio;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -187,59 +188,135 @@ fn write_preview_wav(path: &Path, sample_rate: u32, samples: &[i16]) -> Result<(
 
 fn render_instrument_samples(instrument: &VandInstrument) -> Vec<i16> {
     const RATE: u32 = 44_100;
-    const SECONDS: f32 = 1.35;
-    let sample_count = (RATE as f32 * SECONDS) as usize;
-    let mut out = Vec::with_capacity(sample_count);
+    const FRAME_SAMPLES: usize = 735;
+    const FRAMES: usize = 96;
+    const KEY_OFF_FRAME: usize = 62;
+    const CHANNEL: usize = 0;
+    const OP_OFFSETS: [u8; 4] = [0x00, 0x04, 0x08, 0x0c];
+    let mut audio = Audio::new();
+    audio.reset();
+    let mut out = Vec::with_capacity(FRAMES * FRAME_SAMPLES);
     let name_lc = instrument.name.to_ascii_lowercase();
-    let base_hz = if instrument.category == "bass" || name_lc.contains("bass") {
-        110.0
+    let (fnum, block) = if instrument.category == "bass" || name_lc.contains("bass") {
+        ym2612_pitch_for_hz(110.0)
     } else {
-        220.0
+        ym2612_pitch_for_hz(220.0)
     };
-    let fm = instrument.fm.as_ref();
 
-    for i in 0..sample_count {
-        let t = i as f32 / RATE as f32;
-        let release_start = 1.0;
-        let release = if t > release_start {
-            (1.0 - (t - release_start) / (SECONDS - release_start)).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        let attack = (t / 0.035).min(1.0);
-        let envelope = attack * release;
-        let mut value = 0.0f32;
-
-        if let Some(fm) = fm {
-            let feedback = 1.0 + fm.feedback as f32 * 0.065;
-            let algorithm_bias = 1.0 + fm.algorithm as f32 * 0.025;
-            for (op_index, op) in fm.operators.iter().enumerate() {
-                let mult = op.mult.max(1) as f32;
-                let level = (1.0 - (op.tl.min(96) as f32 / 96.0)).powf(1.35);
-                let rate_shape =
-                    0.65 + op.ar as f32 * 0.012 - op.dr as f32 * 0.004 + op.rr as f32 * 0.003;
-                let sustain = 1.0 - op.sl.min(15) as f32 / 22.0;
-                let detune = (op.dt as f32 - 3.0) * 0.003;
-                let phase = 2.0
-                    * std::f32::consts::PI
-                    * base_hz
-                    * (mult * algorithm_bias + detune)
-                    * feedback
-                    * t;
-                let op_env = envelope * sustain.max(0.18) * rate_shape.clamp(0.2, 1.4);
-                value += phase.sin() * level * op_env / (op_index as f32 + 1.25);
-            }
-        } else if instrument.chip == "sn76489" {
-            let phase = 2.0 * std::f32::consts::PI * 440.0 * t;
-            value = if phase.sin() >= 0.0 { 0.35 } else { -0.35 };
-            value *= envelope;
+    if let Some(fm) = instrument.fm.as_ref() {
+        audio.ym2612.write_register(0, 0x22, 0x00, None, true);
+        audio.ym2612.write_register(0, 0x27, 0x00, None, true);
+        audio.ym2612.write_register(
+            0,
+            0xb0 + CHANNEL as u8,
+            (fm.algorithm & 0x07) | ((fm.feedback & 0x07) << 3),
+            None,
+            true,
+        );
+        audio
+            .ym2612
+            .write_register(0, 0xb4 + CHANNEL as u8, 0xc0, None, true);
+        for (index, op) in fm.operators.iter().take(4).enumerate() {
+            let reg = OP_OFFSETS[index] + CHANNEL as u8;
+            audio.ym2612.write_register(
+                0,
+                0x30 + reg,
+                ((op.dt & 0x07) << 4) | (op.mult & 0x0f),
+                None,
+                true,
+            );
+            audio
+                .ym2612
+                .write_register(0, 0x40 + reg, op.tl.min(127), None, true);
+            audio
+                .ym2612
+                .write_register(0, 0x50 + reg, op.ar.min(31), None, true);
+            audio
+                .ym2612
+                .write_register(0, 0x60 + reg, op.dr.min(31), None, true);
+            audio.ym2612.write_register(0, 0x70 + reg, 0x04, None, true);
+            audio.ym2612.write_register(
+                0,
+                0x80 + reg,
+                ((op.sl.min(15)) << 4) | op.rr.min(15),
+                None,
+                true,
+            );
+            audio.ym2612.write_register(0, 0x90 + reg, 0x00, None, true);
         }
-
-        let sample = (value.clamp(-0.92, 0.92) * 32767.0) as i16;
-        out.push(sample);
+        audio.ym2612.write_register(
+            0,
+            0xa4 + CHANNEL as u8,
+            ((block & 0x07) << 3) | ((fnum >> 8) as u8 & 0x07),
+            None,
+            true,
+        );
+        audio
+            .ym2612
+            .write_register(0, 0xa0 + CHANNEL as u8, (fnum & 0xff) as u8, None, true);
+    } else if instrument.chip == "sn76489" {
+        psg_set_tone(&mut audio, 0, 440.0, 3);
     }
 
+    for frame in 0..FRAMES {
+        audio.begin_frame();
+        if instrument.fm.is_some() {
+            if frame == 0 {
+                audio
+                    .ym2612
+                    .write_register(0, 0x28, 0xf0 | CHANNEL as u8, Some(0), true);
+            } else if frame == KEY_OFF_FRAME {
+                audio
+                    .ym2612
+                    .write_register(0, 0x28, CHANNEL as u8, Some(0), true);
+            }
+        } else if instrument.chip == "sn76489" && frame == KEY_OFF_FRAME {
+            psg_latch_volume(&mut audio, 0, 15);
+        }
+        out.extend(
+            audio
+                .render_frame_samples(FRAME_SAMPLES, RATE as usize)
+                .into_iter()
+                .map(|sample| (sample.clamp(-1.0, 1.0) * 32767.0) as i16),
+        );
+    }
     out
+}
+
+fn ym2612_pitch_for_hz(hz: f32) -> (u16, u8) {
+    const YM2612_CLOCK: f32 = 7_670_454.0;
+    let base = YM2612_CLOCK / 144.0;
+    let mut best = (0x400u16, 4u8, f32::MAX);
+    for block in 1..=7u8 {
+        let divider = 2.0f32.powi(block as i32 - 1);
+        let fnum = (hz * (1u32 << 20) as f32 / base / divider).round();
+        if (256.0..=2047.0).contains(&fnum) {
+            let score = (fnum - 1024.0).abs();
+            if score < best.2 {
+                best = (fnum as u16, block, score);
+            }
+        }
+    }
+    (best.0, best.1)
+}
+
+fn psg_write_latch(audio: &mut Audio, channel: u8, volume: bool, data: u8) {
+    audio.psg.write(
+        0x80 | ((channel & 0x03) << 5) | if volume { 0x10 } else { 0x00 } | (data & 0x0f),
+        None,
+        None,
+    );
+}
+
+fn psg_latch_volume(audio: &mut Audio, channel: u8, volume: u8) {
+    psg_write_latch(audio, channel, true, volume & 0x0f);
+}
+
+fn psg_set_tone(audio: &mut Audio, channel: u8, hz: f64, volume: u8) {
+    let period = (3_579_545.0 / (32.0 * hz)).round().clamp(1.0, 1023.0) as u16;
+    psg_write_latch(audio, channel, false, (period & 0x0f) as u8);
+    audio.psg.write(((period >> 4) & 0x3f) as u8, None, None);
+    psg_latch_volume(audio, channel, volume);
 }
 
 fn parse_metric(log: &str, label: &str) -> u32 {

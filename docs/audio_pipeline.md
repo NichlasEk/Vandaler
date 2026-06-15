@@ -129,6 +129,9 @@ while leaving room for a richer graphical front-end later.
 `make audio-tauri` starts the graphical Vand-AI-lism app. The Tauri front-end has
 file and output-folder pickers, calls the same Rust `analyse-audio` backend, and
 provides audio players for the original source and exported `dac_preview.wav`.
+It can also import or open `bank.vand-instruments.json` manifests, list patches,
+and preview a selected YM2612/SN76489 instrument through the local EutherOxide
+audio core by writing Mega Drive sound-chip registers and rendering a short WAV.
 
 `analyse-audio` is the first Rust-native import/transcription pass. It accepts
 direct 16-bit PCM WAV and can import MP3/OGG/FLAC/other ffmpeg-supported audio
