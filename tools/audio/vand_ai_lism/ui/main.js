@@ -8,6 +8,8 @@ const state = {
   bankPath: "",
   selectedInstrument: null,
   busyCount: 0,
+  settingsLoaded: false,
+  presets: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -50,6 +52,52 @@ function setSource(path) {
 function setOutput(path) {
   state.output = path || "audio/converted";
   $("outputPath").textContent = state.output;
+}
+
+function currentSettings() {
+  return {
+    source: state.source || "",
+    output_dir: state.output || "audio/converted",
+    instrument_bank: state.bankPath || "",
+    presets: state.presets || {},
+  };
+}
+
+async function saveSettings() {
+  if (!state.settingsLoaded) return;
+  try {
+    await invoke("save_settings", { settings: currentSettings() });
+  } catch (err) {
+    setLog(`Settings save failed:\n${err}`);
+  }
+}
+
+async function loadSettings() {
+  try {
+    const settings = await invoke("load_settings");
+    state.settingsLoaded = true;
+    state.presets = settings?.presets || {};
+    setOutput(settings?.output_dir || "audio/converted");
+    if (settings?.source) {
+      setSource(settings.source);
+    }
+    if (settings?.instrument_bank) {
+      try {
+        const result = await invoke("load_instrument_bank", { path: settings.instrument_bank });
+        setBank(result);
+        setLog(`Loaded settings.\n${settings.instrument_bank}`);
+      } catch (err) {
+        state.bankPath = settings.instrument_bank;
+        $("bankPath").textContent = settings.instrument_bank;
+        setLog(`Loaded settings, but bank load failed:\n${err}`);
+      }
+    } else {
+      setLog("Ready.");
+    }
+  } catch (err) {
+    state.settingsLoaded = true;
+    setLog(`Settings load failed:\n${err}`);
+  }
 }
 
 function setSummary(summary) {
@@ -161,6 +209,7 @@ async function chooseAudio() {
       setSource(path);
       setSummary(null);
       setLog(`Selected source:\n${path}`);
+      await saveSettings();
     }
   } catch (err) {
     setLog(`Open failed:\n${err}`);
@@ -174,6 +223,7 @@ async function openBank() {
     const result = await invoke("load_instrument_bank", { path });
     setBank(result);
     setLog(`${result.log}\n${result.manifest_path}`);
+    await saveSettings();
   } catch (err) {
     setLog(`Bank load failed:\n${err}`);
   }
@@ -190,6 +240,7 @@ async function importBank() {
     });
     setBank(result);
     setLog(result.log || `Imported bank:\n${result.manifest_path}`);
+    await saveSettings();
   } catch (err) {
     setLog(`Instrument import failed:\n${err}`);
   }
@@ -201,6 +252,7 @@ async function chooseOutput() {
     if (path) {
       setOutput(path);
       setLog(`Selected output folder:\n${path}`);
+      await saveSettings();
     }
   } catch (err) {
     setLog(`Output picker failed:\n${err}`);
@@ -219,6 +271,7 @@ async function analyse() {
     });
     setSummary(result.summary);
     setLog(result.log || "Analysis complete.");
+    await saveSettings();
   } catch (err) {
     setLog(`Analysis failed:\n${err}`);
   } finally {
@@ -313,3 +366,4 @@ $("previewInstrumentBtn").addEventListener("click", previewInstrument);
 setOutput(state.output);
 setSummary(null);
 setBank(null);
+loadSettings();

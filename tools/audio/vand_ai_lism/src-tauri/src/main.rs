@@ -12,6 +12,33 @@ const DEFAULT_BASS_INSTRUMENT: &str = "growl_bass_wobbly";
 const DEFAULT_LEAD_INSTRUMENT: &str = "fm_grinder";
 const DEFAULT_NOISE_INSTRUMENT: &str = "psg_echo_warble";
 
+#[derive(Clone, Deserialize, Serialize)]
+struct AudioLabSettings {
+    #[serde(default)]
+    source: String,
+    #[serde(default = "default_output_dir")]
+    output_dir: String,
+    #[serde(default)]
+    instrument_bank: String,
+    #[serde(default)]
+    presets: HashMap<String, String>,
+}
+
+impl Default for AudioLabSettings {
+    fn default() -> Self {
+        Self {
+            source: String::new(),
+            output_dir: default_output_dir(),
+            instrument_bank: String::new(),
+            presets: HashMap::new(),
+        }
+    }
+}
+
+fn default_output_dir() -> String {
+    "audio/converted".to_string()
+}
+
 #[derive(Serialize)]
 struct AnalysisSummary {
     frames: u32,
@@ -189,6 +216,10 @@ fn repo_root() -> Result<PathBuf, String> {
         .nth(4)
         .map(Path::to_path_buf)
         .ok_or_else(|| "could not locate repository root".to_string())
+}
+
+fn settings_path() -> Result<PathBuf, String> {
+    Ok(repo_root()?.join("tools/audio/vand_ai_lism/settings.toml"))
 }
 
 fn bundle_path(input: &Path, output_dir: &Path) -> PathBuf {
@@ -808,6 +839,16 @@ fn parse_metric(log: &str, label: &str) -> u32 {
         .unwrap_or(0)
 }
 
+async fn run_blocking<T, F>(work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|err| format!("background task failed: {err}"))?
+}
+
 #[tauri::command]
 fn pick_audio_file() -> Option<String> {
     rfd::FileDialog::new()
@@ -849,6 +890,29 @@ fn read_instrument_bank(path: &Path) -> Result<InstrumentBankManifest, String> {
 }
 
 #[tauri::command]
+fn load_settings() -> Result<AudioLabSettings, String> {
+    let path = settings_path()?;
+    if !path.exists() {
+        return Ok(AudioLabSettings::default());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    toml::from_str(&text).map_err(|err| format!("invalid settings TOML: {err}"))
+}
+
+#[tauri::command]
+fn save_settings(settings: AudioLabSettings) -> Result<(), String> {
+    let path = settings_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+    }
+    let text = toml::to_string_pretty(&settings)
+        .map_err(|err| format!("failed to encode settings TOML: {err}"))?;
+    fs::write(&path, text).map_err(|err| format!("failed to write {}: {err}", path.display()))
+}
+
+#[tauri::command]
 fn load_instrument_bank(path: String) -> Result<InstrumentBankResult, String> {
     let path = PathBuf::from(path);
     let manifest = read_instrument_bank(&path)?;
@@ -860,172 +924,194 @@ fn load_instrument_bank(path: String) -> Result<InstrumentBankResult, String> {
 }
 
 #[tauri::command]
-fn analyse_audio(input: String, output_dir: String) -> Result<AnalysisResult, String> {
-    let repo = repo_root()?;
-    let input_path = PathBuf::from(&input);
-    let output_dir = resolve_output_dir(&repo, &PathBuf::from(&output_dir));
-    let output_path = bundle_path(&input_path, &output_dir);
-    let lab_manifest = repo.join("tools/audio/audio_lab/Cargo.toml");
+async fn analyse_audio(input: String, output_dir: String) -> Result<AnalysisResult, String> {
+    run_blocking(move || {
+        let repo = repo_root()?;
+        let input_path = PathBuf::from(&input);
+        let output_dir = resolve_output_dir(&repo, &PathBuf::from(&output_dir));
+        let output_path = bundle_path(&input_path, &output_dir);
+        let lab_manifest = repo.join("tools/audio/audio_lab/Cargo.toml");
 
-    let output = Command::new("cargo")
-        .current_dir(&repo)
-        .arg("run")
-        .arg("--manifest-path")
-        .arg(&lab_manifest)
-        .arg("--")
-        .arg("analyse-audio")
-        .arg(&input_path)
-        .arg("--out")
-        .arg(&output_path)
-        .output()
-        .map_err(|err| format!("failed to start audio lab: {err}"))?;
+        let output = Command::new("cargo")
+            .current_dir(&repo)
+            .arg("run")
+            .arg("--manifest-path")
+            .arg(&lab_manifest)
+            .arg("--")
+            .arg("analyse-audio")
+            .arg(&input_path)
+            .arg("--out")
+            .arg(&output_path)
+            .output()
+            .map_err(|err| format!("failed to start audio lab: {err}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let log = format!("{stdout}{stderr}");
-    if !output.status.success() {
-        return Err(log);
-    }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let log = format!("{stdout}{stderr}");
+        if !output.status.success() {
+            return Err(log);
+        }
 
-    let bundle_dir = output_path
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| "analysis output path has no parent".to_string())?;
-    let preview_report_path = bundle_dir.join("preview_report.json");
-    let preview_report = fs::read_to_string(&preview_report_path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<PreviewReport>(&text).ok())
-        .unwrap_or_default();
-    let summary = AnalysisSummary {
-        frames: parse_metric(&log, "frames,"),
-        active_frames: parse_metric(&log, "active,"),
-        runtime_events: parse_metric(&log, "runtime events,"),
-        dac_chunks: parse_metric(&log, "dac chunks"),
-        arrangement: output_path.display().to_string(),
-        note_arrangement: bundle_dir
-            .join("note_arrangement.vand-audio.json")
-            .display()
-            .to_string(),
-        preview_report: preview_report_path.display().to_string(),
-        key: preview_report.key,
-        bpm: preview_report.bpm,
-        bass_notes: preview_report.bass_notes,
-        lead_notes: preview_report.lead_notes,
-        drum_events: preview_report.drum_events,
-        import_metadata: bundle_dir.join("import.json").display().to_string(),
-        dac_preview: bundle_dir.join("dac_preview.wav").display().to_string(),
-        bundle_dir: bundle_dir.display().to_string(),
-    };
+        let bundle_dir = output_path
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| "analysis output path has no parent".to_string())?;
+        let preview_report_path = bundle_dir.join("preview_report.json");
+        let preview_report = fs::read_to_string(&preview_report_path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<PreviewReport>(&text).ok())
+            .unwrap_or_default();
+        let summary = AnalysisSummary {
+            frames: parse_metric(&log, "frames,"),
+            active_frames: parse_metric(&log, "active,"),
+            runtime_events: parse_metric(&log, "runtime events,"),
+            dac_chunks: parse_metric(&log, "dac chunks"),
+            arrangement: output_path.display().to_string(),
+            note_arrangement: bundle_dir
+                .join("note_arrangement.vand-audio.json")
+                .display()
+                .to_string(),
+            preview_report: preview_report_path.display().to_string(),
+            key: preview_report.key,
+            bpm: preview_report.bpm,
+            bass_notes: preview_report.bass_notes,
+            lead_notes: preview_report.lead_notes,
+            drum_events: preview_report.drum_events,
+            import_metadata: bundle_dir.join("import.json").display().to_string(),
+            dac_preview: bundle_dir.join("dac_preview.wav").display().to_string(),
+            bundle_dir: bundle_dir.display().to_string(),
+        };
 
-    Ok(AnalysisResult { summary, log })
+        Ok(AnalysisResult { summary, log })
+    })
+    .await
 }
 
 #[tauri::command]
-fn import_instrument_dir(
+async fn import_instrument_dir(
     input_dir: String,
     output_dir: String,
 ) -> Result<InstrumentBankResult, String> {
-    let repo = repo_root()?;
-    let input_path = PathBuf::from(&input_dir);
-    let output_dir = resolve_output_dir(&repo, &PathBuf::from(&output_dir));
-    let bank_name = input_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("bank");
-    let output_path = output_dir.join(format!("{bank_name}.vand-instruments"));
-    let lab_manifest = repo.join("tools/audio/audio_lab/Cargo.toml");
+    run_blocking(move || {
+        let repo = repo_root()?;
+        let input_path = PathBuf::from(&input_dir);
+        let output_dir = resolve_output_dir(&repo, &PathBuf::from(&output_dir));
+        let bank_name = input_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("bank");
+        let output_path = output_dir.join(format!("{bank_name}.vand-instruments"));
+        let lab_manifest = repo.join("tools/audio/audio_lab/Cargo.toml");
 
-    let output = Command::new("cargo")
-        .current_dir(&repo)
-        .arg("run")
-        .arg("--manifest-path")
-        .arg(&lab_manifest)
-        .arg("--")
-        .arg("import-instrument-dir")
-        .arg(&input_path)
-        .arg("--out")
-        .arg(&output_path)
-        .output()
-        .map_err(|err| format!("failed to start audio lab: {err}"))?;
+        let output = Command::new("cargo")
+            .current_dir(&repo)
+            .arg("run")
+            .arg("--manifest-path")
+            .arg(&lab_manifest)
+            .arg("--")
+            .arg("import-instrument-dir")
+            .arg(&input_path)
+            .arg("--out")
+            .arg(&output_path)
+            .output()
+            .map_err(|err| format!("failed to start audio lab: {err}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let log = format!("{stdout}{stderr}");
-    if !output.status.success() {
-        return Err(log);
-    }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let log = format!("{stdout}{stderr}");
+        if !output.status.success() {
+            return Err(log);
+        }
 
-    let manifest_path = output_path.join("bank.vand-instruments.json");
-    let manifest = read_instrument_bank(&manifest_path)?;
-    Ok(InstrumentBankResult {
-        manifest,
-        manifest_path: manifest_path.display().to_string(),
-        log,
+        let manifest_path = output_path.join("bank.vand-instruments.json");
+        let manifest = read_instrument_bank(&manifest_path)?;
+        Ok(InstrumentBankResult {
+            manifest,
+            manifest_path: manifest_path.display().to_string(),
+            log,
+        })
     })
+    .await
 }
 
 #[tauri::command]
-fn audio_data_url(path: String) -> Result<String, String> {
-    let path = PathBuf::from(path);
-    let mime = mime_for_path(&path)?;
-    let bytes =
-        fs::read(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-    Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)))
+async fn audio_data_url(path: String) -> Result<String, String> {
+    run_blocking(move || {
+        let path = PathBuf::from(path);
+        let mime = mime_for_path(&path)?;
+        let bytes =
+            fs::read(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+        Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)))
+    })
+    .await
 }
 
 #[tauri::command]
-fn instrument_preview_data_url(path: String) -> Result<String, String> {
-    let path = PathBuf::from(path);
-    let instrument = read_instrument(&path)?;
-    let mut samples = render_instrument_samples(&instrument);
-    normalize_preview_samples(&mut samples, 22_000);
-    let preview = std::env::temp_dir().join("vand-ai-lism-instrument-preview.wav");
-    write_preview_wav(&preview, 44_100, &samples)?;
-    let bytes =
-        fs::read(&preview).map_err(|err| format!("failed to read {}: {err}", preview.display()))?;
-    Ok(format!("data:audio/wav;base64,{}", base64_encode(&bytes)))
+async fn instrument_preview_data_url(path: String) -> Result<String, String> {
+    run_blocking(move || {
+        let path = PathBuf::from(path);
+        let instrument = read_instrument(&path)?;
+        let mut samples = render_instrument_samples(&instrument);
+        normalize_preview_samples(&mut samples, 22_000);
+        let preview = std::env::temp_dir().join("vand-ai-lism-instrument-preview.wav");
+        write_preview_wav(&preview, 44_100, &samples)?;
+        let bytes = fs::read(&preview)
+            .map_err(|err| format!("failed to read {}: {err}", preview.display()))?;
+        Ok(format!("data:audio/wav;base64,{}", base64_encode(&bytes)))
+    })
+    .await
 }
 
 #[tauri::command]
-fn arrangement_preview_data_url(path: String, bank_path: String) -> Result<String, String> {
-    let repo = repo_root()?;
-    let arrangement_path = PathBuf::from(path);
-    let text = fs::read_to_string(&arrangement_path)
-        .map_err(|err| format!("failed to read {}: {err}", arrangement_path.display()))?;
-    let arrangement: VandArrangement =
-        serde_json::from_str(&text).map_err(|err| format!("invalid arrangement JSON: {err}"))?;
-    let instruments =
-        load_instrument_bank_for_arrangement(&repo, &arrangement_path, &arrangement, &bank_path)?;
-    let mut samples = render_arrangement_samples(&arrangement, &instruments);
-    normalize_preview_samples(&mut samples, 22_000);
-    let preview = std::env::temp_dir().join("vand-ai-lism-arrangement-preview.wav");
-    write_preview_wav(&preview, 44_100, &samples)?;
-    let bytes =
-        fs::read(&preview).map_err(|err| format!("failed to read {}: {err}", preview.display()))?;
-    Ok(format!("data:audio/wav;base64,{}", base64_encode(&bytes)))
+async fn arrangement_preview_data_url(path: String, bank_path: String) -> Result<String, String> {
+    run_blocking(move || {
+        let repo = repo_root()?;
+        let arrangement_path = PathBuf::from(path);
+        let text = fs::read_to_string(&arrangement_path)
+            .map_err(|err| format!("failed to read {}: {err}", arrangement_path.display()))?;
+        let arrangement: VandArrangement = serde_json::from_str(&text)
+            .map_err(|err| format!("invalid arrangement JSON: {err}"))?;
+        let instruments = load_instrument_bank_for_arrangement(
+            &repo,
+            &arrangement_path,
+            &arrangement,
+            &bank_path,
+        )?;
+        let mut samples = render_arrangement_samples(&arrangement, &instruments);
+        normalize_preview_samples(&mut samples, 22_000);
+        let preview = std::env::temp_dir().join("vand-ai-lism-arrangement-preview.wav");
+        write_preview_wav(&preview, 44_100, &samples)?;
+        let bytes = fs::read(&preview)
+            .map_err(|err| format!("failed to read {}: {err}", preview.display()))?;
+        Ok(format!("data:audio/wav;base64,{}", base64_encode(&bytes)))
+    })
+    .await
 }
 
 #[tauri::command]
-fn note_preview_data_url(path: String, bank_path: String) -> Result<String, String> {
-    let repo = repo_root()?;
-    let arrangement_path = PathBuf::from(path);
-    let text = fs::read_to_string(&arrangement_path)
-        .map_err(|err| format!("failed to read {}: {err}", arrangement_path.display()))?;
-    let arrangement: VandNoteArrangement = serde_json::from_str(&text)
-        .map_err(|err| format!("invalid note arrangement JSON: {err}"))?;
-    let instruments = load_instrument_bank_for_note_arrangement(
-        &repo,
-        &arrangement_path,
-        &arrangement,
-        &bank_path,
-    )?;
-    let mut samples = render_note_arrangement_samples(&arrangement, &instruments);
-    normalize_preview_samples(&mut samples, 22_000);
-    let preview = std::env::temp_dir().join("vand-ai-lism-note-preview.wav");
-    write_preview_wav(&preview, 44_100, &samples)?;
-    let bytes =
-        fs::read(&preview).map_err(|err| format!("failed to read {}: {err}", preview.display()))?;
-    Ok(format!("data:audio/wav;base64,{}", base64_encode(&bytes)))
+async fn note_preview_data_url(path: String, bank_path: String) -> Result<String, String> {
+    run_blocking(move || {
+        let repo = repo_root()?;
+        let arrangement_path = PathBuf::from(path);
+        let text = fs::read_to_string(&arrangement_path)
+            .map_err(|err| format!("failed to read {}: {err}", arrangement_path.display()))?;
+        let arrangement: VandNoteArrangement = serde_json::from_str(&text)
+            .map_err(|err| format!("invalid note arrangement JSON: {err}"))?;
+        let instruments = load_instrument_bank_for_note_arrangement(
+            &repo,
+            &arrangement_path,
+            &arrangement,
+            &bank_path,
+        )?;
+        let mut samples = render_note_arrangement_samples(&arrangement, &instruments);
+        normalize_preview_samples(&mut samples, 22_000);
+        let preview = std::env::temp_dir().join("vand-ai-lism-note-preview.wav");
+        write_preview_wav(&preview, 44_100, &samples)?;
+        let bytes = fs::read(&preview)
+            .map_err(|err| format!("failed to read {}: {err}", preview.display()))?;
+        Ok(format!("data:audio/wav;base64,{}", base64_encode(&bytes)))
+    })
+    .await
 }
 
 fn main() {
@@ -1035,6 +1121,8 @@ fn main() {
             pick_output_dir,
             pick_instrument_dir,
             pick_instrument_bank,
+            load_settings,
+            save_settings,
             load_instrument_bank,
             analyse_audio,
             import_instrument_dir,
@@ -1148,5 +1236,28 @@ mod tests {
             .max()
             .unwrap_or(0);
         assert!(peak >= 18_000, "note preview peak too low: {peak}");
+    }
+
+    #[test]
+    fn serializes_audio_lab_settings_as_toml() {
+        let mut presets = HashMap::new();
+        presets.insert("preview".to_string(), "note".to_string());
+        let settings = AudioLabSettings {
+            source: "/tmp/song.ogg".to_string(),
+            output_dir: "audio/converted".to_string(),
+            instrument_bank: "audio/instruments/core.json".to_string(),
+            presets,
+        };
+        let text = toml::to_string_pretty(&settings).expect("settings toml");
+        assert!(text.contains("source = \"/tmp/song.ogg\""));
+        assert!(text.contains("[presets]"));
+        let decoded: AudioLabSettings = toml::from_str(&text).expect("decode settings");
+        assert_eq!(decoded.source, settings.source);
+        assert_eq!(decoded.output_dir, settings.output_dir);
+        assert_eq!(decoded.instrument_bank, settings.instrument_bank);
+        assert_eq!(
+            decoded.presets.get("preview").map(String::as_str),
+            Some("note")
+        );
     }
 }
