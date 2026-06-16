@@ -1726,52 +1726,6 @@ fn ym2612_pitch(hz: f32) -> (u16, u8) {
     (best_fnum, best_block)
 }
 
-fn frame_dac_chunk(frame: &AnalysisFrame, chunks: &[DacChunk]) -> (u8, u8) {
-    for chunk in chunks {
-        if chunk.start_frame == frame.index {
-            return (
-                chunk.id.min(254) as u8,
-                level15(frame.transient.max(frame.noise_amp)),
-            );
-        }
-    }
-    (255, 0)
-}
-
-fn frame_to_runtime(frame: &AnalysisFrame, chunks: &[DacChunk]) -> RuntimeEvent {
-    let (fm0_fnum, fm0_block) = ym2612_pitch(frame.bass_hz);
-    let (fm1_fnum, fm1_block) = ym2612_pitch(frame.lead_hz);
-    let kind = class_id(frame.class_name);
-    let (dac_chunk, dac_level) = frame_dac_chunk(frame, chunks);
-    let noise = if kind == 3 || kind == 4 {
-        frame.noise_amp.max(frame.transient)
-    } else {
-        frame.noise_amp * 0.75
-    };
-
-    RuntimeEvent {
-        frames: 1,
-        fm0_fnum,
-        fm0_block,
-        fm0_level: if fm0_fnum == 0 {
-            0
-        } else {
-            level15(frame.bass_amp)
-        },
-        fm1_fnum,
-        fm1_block,
-        fm1_level: if fm1_fnum == 0 {
-            0
-        } else {
-            level15(frame.lead_amp)
-        },
-        psg_noise_level: level15(noise),
-        kind,
-        dac_chunk,
-        dac_level,
-    }
-}
-
 fn equivalent_runtime(a: &RuntimeEvent, b: &RuntimeEvent) -> bool {
     a.fm0_fnum == b.fm0_fnum
         && a.fm0_block == b.fm0_block
@@ -1785,45 +1739,149 @@ fn equivalent_runtime(a: &RuntimeEvent, b: &RuntimeEvent) -> bool {
         && a.dac_level == b.dac_level
 }
 
-fn runtime_ticks(frame_count: usize, sample_rate: u32) -> u16 {
-    let seconds = frame_count as f32 * ANALYSIS_HOP as f32 / sample_rate as f32;
-    (seconds * 60.0).round().clamp(1.0, u16::MAX as f32) as u16
+fn analysis_frame_to_tick(frame: usize, sample_rate: u32) -> u32 {
+    let seconds = frame as f32 * ANALYSIS_HOP as f32 / sample_rate as f32;
+    (seconds * 60.0).round().max(0.0) as u32
 }
 
-fn build_runtime_events(
+fn note_active_at_tick(note: &NoteEvent, tick: u32, sample_rate: u32) -> bool {
+    let start = analysis_frame_to_tick(note.start_frame, sample_rate);
+    let end = analysis_frame_to_tick(note.start_frame + note.frames.max(1), sample_rate);
+    tick >= start && tick < end.max(start + 1)
+}
+
+fn note_to_runtime_pitch(note: Option<&NoteEvent>) -> (u16, u8, u8) {
+    if let Some(note) = note {
+        let (fnum, block) = ym2612_pitch(note.hz);
+        let level = if fnum == 0 {
+            0
+        } else {
+            level15(note.velocity * 0.95)
+        };
+        return (fnum, block, level);
+    }
+    (0, 0, 0)
+}
+
+fn drum_at_tick<'a>(drums: &'a [DrumEvent], tick: u32, sample_rate: u32) -> Option<&'a DrumEvent> {
+    drums
+        .iter()
+        .filter(|drum| analysis_frame_to_tick(drum.start_frame, sample_rate) == tick)
+        .max_by(|a, b| {
+            let a_score = a.velocity + if a.dac_chunk.is_some() { 1.0 } else { 0.0 };
+            let b_score = b.velocity + if b.dac_chunk.is_some() { 1.0 } else { 0.0 };
+            a_score
+                .partial_cmp(&b_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
+
+fn push_note_change_points(points: &mut Vec<u32>, note: &NoteEvent, sample_rate: u32) {
+    let start = analysis_frame_to_tick(note.start_frame, sample_rate);
+    let end = analysis_frame_to_tick(note.start_frame + note.frames.max(1), sample_rate);
+    points.push(start);
+    points.push(end.max(start + 1));
+}
+
+fn build_runtime_events_from_render_plan(
+    sample_rate: u32,
+    loop_end_frame: usize,
+    bass_notes: &[NoteEvent],
+    lead_notes: &[NoteEvent],
+    drum_events: &[DrumEvent],
+) -> Vec<RuntimeEvent> {
+    let loop_end_tick = analysis_frame_to_tick(loop_end_frame.max(1), sample_rate).max(1);
+    let mut points = vec![0, loop_end_tick];
+
+    for note in bass_notes {
+        push_note_change_points(&mut points, note, sample_rate);
+    }
+    for note in lead_notes {
+        push_note_change_points(&mut points, note, sample_rate);
+    }
+    for drum in drum_events {
+        let tick = analysis_frame_to_tick(drum.start_frame, sample_rate);
+        if tick < loop_end_tick {
+            points.push(tick);
+            points.push((tick + 1).min(loop_end_tick));
+        }
+    }
+
+    points.sort_unstable();
+    points.dedup();
+
+    let mut out = Vec::new();
+    for pair in points.windows(2) {
+        let tick = pair[0];
+        let next_tick = pair[1];
+        if tick >= loop_end_tick || next_tick <= tick {
+            continue;
+        }
+
+        let bass = bass_notes
+            .iter()
+            .find(|note| note_active_at_tick(note, tick, sample_rate));
+        let lead = lead_notes
+            .iter()
+            .find(|note| note_active_at_tick(note, tick, sample_rate));
+        let drum = drum_at_tick(drum_events, tick, sample_rate);
+        let (fm0_fnum, fm0_block, fm0_level) = note_to_runtime_pitch(bass);
+        let (fm1_fnum, fm1_block, fm1_level) = note_to_runtime_pitch(lead);
+        let psg_noise_level = drum
+            .map(|drum| level15(drum.noise_amp.max(drum.velocity * 0.7)))
+            .unwrap_or(0);
+        let dac_chunk = drum.and_then(|drum| drum.dac_chunk).unwrap_or(255).min(254) as u8;
+        let dac_level = drum.map(|drum| level15(drum.velocity)).unwrap_or(0);
+        let kind = if drum.is_some() {
+            class_id("drum")
+        } else if bass.is_some() {
+            class_id("bass")
+        } else if lead.is_some() {
+            class_id("tonal")
+        } else {
+            class_id("silence")
+        };
+
+        let next = RuntimeEvent {
+            frames: (next_tick - tick).clamp(1, u16::MAX as u32) as u16,
+            fm0_fnum,
+            fm0_block,
+            fm0_level,
+            fm1_fnum,
+            fm1_block,
+            fm1_level,
+            psg_noise_level,
+            kind,
+            dac_chunk,
+            dac_level,
+        };
+
+        if let Some(last) = out.last_mut() {
+            if equivalent_runtime(last, &next) {
+                last.frames = last.frames.saturating_add(next.frames);
+                continue;
+            }
+        }
+        out.push(next);
+    }
+
+    out
+}
+
+fn build_render_plan_runtime_events(
     frames: &[AnalysisFrame],
     sample_rate: u32,
     chunks: &[DacChunk],
 ) -> Vec<RuntimeEvent> {
-    let mut out = Vec::new();
-    let mut pending: Option<RuntimeEvent> = None;
-    let mut pending_frames = 0usize;
-
-    for frame in frames {
-        let next = frame_to_runtime(frame, chunks);
-        match pending.as_mut() {
-            Some(current) if equivalent_runtime(current, &next) => {
-                pending_frames += 1;
-            }
-            Some(current) => {
-                current.frames = runtime_ticks(pending_frames, sample_rate);
-                out.push(current.clone());
-                pending = Some(next);
-                pending_frames = 1;
-            }
-            None => {
-                pending = Some(next);
-                pending_frames = 1;
-            }
-        }
-    }
-
-    if let Some(mut current) = pending {
-        current.frames = runtime_ticks(pending_frames, sample_rate);
-        out.push(current);
-    }
-
-    out
+    let (context, bass_notes, lead_notes, drum_events) =
+        build_note_preview_data(frames, sample_rate, chunks);
+    build_runtime_events_from_render_plan(
+        sample_rate,
+        context.loop_end_frame,
+        &bass_notes,
+        &lead_notes,
+        &drum_events,
+    )
 }
 
 fn write_runtime_binary(path: &Path, sample_rate: u32, events: &[RuntimeEvent]) -> io::Result<()> {
@@ -2951,7 +3009,8 @@ fn analyse_input(
     let imported = import_audio(input, &bundle_dir)?;
     let frames = analyse_samples(&imported.wav);
     let dac_chunks = extract_dac_chunks(&bundle_dir, &imported.wav, &frames)?;
-    let runtime_events = build_runtime_events(&frames, imported.wav.sample_rate, &dac_chunks);
+    let runtime_events =
+        build_render_plan_runtime_events(&frames, imported.wav.sample_rate, &dac_chunks);
     let import_metadata = bundle_dir.join("import.json");
     let note_arrangement = bundle_dir.join("note_arrangement.vand-audio.json");
     let render_plan = bundle_dir.join("render_plan.vand-audio.json");
