@@ -12,6 +12,25 @@ const DEFAULT_BASS_INSTRUMENT: &str = "growl_bass_wobbly";
 const DEFAULT_LEAD_INSTRUMENT: &str = "fm_grinder";
 const DEFAULT_NOISE_INSTRUMENT: &str = "psg_echo_warble";
 
+#[derive(Clone, Copy)]
+struct RenderMix {
+    bass_gain: f32,
+    lead_gain: f32,
+    psg_gain: f32,
+    dac_gain: f32,
+}
+
+impl Default for RenderMix {
+    fn default() -> Self {
+        Self {
+            bass_gain: 1.0,
+            lead_gain: 0.85,
+            psg_gain: 0.85,
+            dac_gain: 1.0,
+        }
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 struct AudioLabSettings {
     #[serde(default)]
@@ -713,6 +732,7 @@ fn render_note_arrangement_samples(
     arrangement: &VandNoteArrangement,
     instruments: &HashMap<String, VandInstrument>,
     arrangement_dir: &Path,
+    mix: RenderMix,
 ) -> Vec<i16> {
     const RATE: u32 = 44_100;
     let frame_samples = frame_sample_count(arrangement.sample_rate, arrangement.hop);
@@ -785,7 +805,13 @@ fn render_note_arrangement_samples(
                 *active = false;
             }
             if let Some(instrument) = instruments.get(current_id.as_str()) {
-                let attenuation = ((1.0 - note.velocity.clamp(0.0, 1.0)) * 22.0) as u8;
+                let role_gain = if note.track == "bass" {
+                    mix.bass_gain
+                } else {
+                    mix.lead_gain
+                };
+                let effective_velocity = (note.velocity * role_gain).clamp(0.0, 1.0);
+                let attenuation = ((1.0 - effective_velocity) * 28.0) as u8;
                 write_fm_patch(&mut audio, instrument, channel, attenuation);
             }
             write_fm_pitch(&mut audio, channel, note.hz);
@@ -812,7 +838,8 @@ fn render_note_arrangement_samples(
                 &drum.instrument_id
             };
             if instruments.contains_key(id) {
-                noise_amp = drum.noise_amp.max(drum.velocity * 0.65).clamp(0.0, 1.0);
+                noise_amp =
+                    (drum.noise_amp.max(drum.velocity * 0.65) * mix.psg_gain).clamp(0.0, 1.0);
                 noise_until = frame.saturating_add(3);
             }
             drum_index += 1;
@@ -830,7 +857,13 @@ fn render_note_arrangement_samples(
         ));
     }
 
-    mix_dac_drums(&mut out, &drums, arrangement_dir, frame_samples);
+    mix_dac_drums(
+        &mut out,
+        &drums,
+        arrangement_dir,
+        frame_samples,
+        mix.dac_gain,
+    );
     out
 }
 
@@ -839,6 +872,7 @@ fn mix_dac_drums(
     drums: &[VandDrumEvent],
     arrangement_dir: &Path,
     frame_samples: usize,
+    dac_gain: f32,
 ) {
     const PREVIEW_RATE: usize = 44_100;
     const DAC_RATE: usize = 13_320;
@@ -866,7 +900,8 @@ fn mix_dac_drums(
         if start >= out.len() {
             continue;
         }
-        let gain = drum.velocity.max(drum.noise_amp).clamp(0.0, 1.0) * 0.55;
+        let gain =
+            drum.velocity.max(drum.noise_amp).clamp(0.0, 1.0) * dac_gain.clamp(0.0, 2.0) * 0.55;
         let preview_len = ((bytes.len() as u64 * PREVIEW_RATE as u64 + (DAC_RATE / 2) as u64)
             / DAC_RATE as u64)
             .max(1) as usize;
@@ -1145,7 +1180,14 @@ async fn arrangement_preview_data_url(path: String, bank_path: String) -> Result
 }
 
 #[tauri::command]
-async fn note_preview_data_url(path: String, bank_path: String) -> Result<String, String> {
+async fn note_preview_data_url(
+    path: String,
+    bank_path: String,
+    bass_gain: f32,
+    lead_gain: f32,
+    psg_gain: f32,
+    dac_gain: f32,
+) -> Result<String, String> {
     run_blocking(move || {
         let repo = repo_root()?;
         let arrangement_path = PathBuf::from(path);
@@ -1160,8 +1202,14 @@ async fn note_preview_data_url(path: String, bank_path: String) -> Result<String
             &bank_path,
         )?;
         let arrangement_dir = arrangement_path.parent().unwrap_or_else(|| Path::new("."));
+        let mix = RenderMix {
+            bass_gain: bass_gain.clamp(0.0, 2.0),
+            lead_gain: lead_gain.clamp(0.0, 2.0),
+            psg_gain: psg_gain.clamp(0.0, 2.0),
+            dac_gain: dac_gain.clamp(0.0, 2.0),
+        };
         let mut samples =
-            render_note_arrangement_samples(&arrangement, &instruments, arrangement_dir);
+            render_note_arrangement_samples(&arrangement, &instruments, arrangement_dir, mix);
         normalize_preview_samples(&mut samples, 22_000);
         let preview = std::env::temp_dir().join("vand-ai-lism-note-preview.wav");
         write_preview_wav(&preview, 44_100, &samples)?;
@@ -1290,6 +1338,7 @@ mod tests {
             &arrangement,
             &instruments,
             arrangement_path.parent().unwrap(),
+            RenderMix::default(),
         );
         assert!(!samples.is_empty());
         assert!(samples.iter().any(|sample| *sample != 0));
@@ -1343,7 +1392,7 @@ mod tests {
             dac_path: "dac_chunks/chunk_00.u8".to_string(),
         }];
         let mut out = vec![0i16; 256];
-        mix_dac_drums(&mut out, &drums, &dir, 32);
+        mix_dac_drums(&mut out, &drums, &dir, 32, 1.0);
         assert!(out.iter().any(|sample| *sample != 0));
     }
 }

@@ -54,6 +54,39 @@
           <div id="instrumentList" class="instrumentList">No instruments loaded.</div>
         </section>
 
+        <section class="renderControls">
+          <label>
+            <span>Preview preset</span>
+            <select id="previewPreset">
+              <option value="balanced">Balanced</option>
+              <option value="clean">Clean FM</option>
+              <option value="dac-heavy">DAC Heavy</option>
+              <option value="lead-cut">Bass First</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          <label>
+            <span>Bass</span>
+            <input id="bassGain" type="range" min="0" max="2" step="0.05" value="1" />
+            <strong id="bassGainValue">1.00</strong>
+          </label>
+          <label>
+            <span>Lead</span>
+            <input id="leadGain" type="range" min="0" max="2" step="0.05" value="0.85" />
+            <strong id="leadGainValue">0.85</strong>
+          </label>
+          <label>
+            <span>PSG</span>
+            <input id="psgGain" type="range" min="0" max="2" step="0.05" value="0.85" />
+            <strong id="psgGainValue">0.85</strong>
+          </label>
+          <label>
+            <span>DAC</span>
+            <input id="dacGain" type="range" min="0" max="2" step="0.05" value="1" />
+            <strong id="dacGainValue">1.00</strong>
+          </label>
+        </section>
+
         <section class="players">
           <article>
             <div class="panelTitle">

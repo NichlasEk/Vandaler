@@ -9,7 +9,13 @@ const state = {
   selectedInstrument: null,
   busyCount: 0,
   settingsLoaded: false,
-  presets: {},
+  presets: {
+    previewPreset: "balanced",
+    bassGain: "1",
+    leadGain: "0.85",
+    psgGain: "0.85",
+    dacGain: "1",
+  },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -54,6 +60,42 @@ function setOutput(path) {
   $("outputPath").textContent = state.output;
 }
 
+const presetValues = {
+  balanced: { bassGain: 1, leadGain: 0.85, psgGain: 0.85, dacGain: 1 },
+  clean: { bassGain: 1, leadGain: 0.7, psgGain: 0.35, dacGain: 0.45 },
+  "dac-heavy": { bassGain: 1, leadGain: 0.8, psgGain: 0.7, dacGain: 1.65 },
+  "lead-cut": { bassGain: 1.2, leadGain: 0.35, psgGain: 0.75, dacGain: 1.1 },
+};
+
+function readMixControls() {
+  return {
+    bassGain: Number($("bassGain").value),
+    leadGain: Number($("leadGain").value),
+    psgGain: Number($("psgGain").value),
+    dacGain: Number($("dacGain").value),
+  };
+}
+
+function setSlider(id, value) {
+  $(id).value = String(value);
+  $(`${id}Value`).textContent = Number(value).toFixed(2);
+}
+
+function applyMixControls(values, preset = "custom") {
+  $("previewPreset").value = preset;
+  for (const [id, value] of Object.entries(values)) {
+    setSlider(id, value);
+  }
+  state.presets = {
+    ...state.presets,
+    previewPreset: preset,
+    bassGain: String($("bassGain").value),
+    leadGain: String($("leadGain").value),
+    psgGain: String($("psgGain").value),
+    dacGain: String($("dacGain").value),
+  };
+}
+
 function currentSettings() {
   return {
     source: state.source || "",
@@ -76,7 +118,16 @@ async function loadSettings() {
   try {
     const settings = await invoke("load_settings");
     state.settingsLoaded = true;
-    state.presets = settings?.presets || {};
+    state.presets = { ...state.presets, ...(settings?.presets || {}) };
+    applyMixControls(
+      {
+        bassGain: Number(state.presets.bassGain || 1),
+        leadGain: Number(state.presets.leadGain || 0.85),
+        psgGain: Number(state.presets.psgGain || 0.85),
+        dacGain: Number(state.presets.dacGain || 1),
+      },
+      state.presets.previewPreset || "balanced",
+    );
     setOutput(settings?.output_dir || "audio/converted");
     if (settings?.source) {
       setSource(settings.source);
@@ -341,6 +392,7 @@ async function loadNote() {
     player.src = await invoke("note_preview_data_url", {
       path: state.summary.note_arrangement,
       bankPath: state.bankPath || "",
+      ...readMixControls(),
     });
     await player.play();
     setLog(`Playing note preview:\n${state.summary.note_arrangement}`);
@@ -362,8 +414,25 @@ $("loadDacBtn").addEventListener("click", loadDac);
 $("loadArrangementBtn").addEventListener("click", loadArrangement);
 $("loadNoteBtn").addEventListener("click", loadNote);
 $("previewInstrumentBtn").addEventListener("click", previewInstrument);
+$("previewPreset").addEventListener("change", async () => {
+  const preset = $("previewPreset").value;
+  if (presetValues[preset]) {
+    applyMixControls(presetValues[preset], preset);
+    await saveSettings();
+  }
+});
+for (const id of ["bassGain", "leadGain", "psgGain", "dacGain"]) {
+  $(id).addEventListener("input", () => {
+    setSlider(id, $(id).value);
+    $("previewPreset").value = "custom";
+    state.presets.previewPreset = "custom";
+    state.presets[id] = String($(id).value);
+  });
+  $(id).addEventListener("change", saveSettings);
+}
 
 setOutput(state.output);
 setSummary(null);
 setBank(null);
+applyMixControls(presetValues.balanced, "balanced");
 loadSettings();

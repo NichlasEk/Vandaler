@@ -3,3 +3,8 @@ output_dir = "audio/converted"
 instrument_bank = ""
 
 [presets]
+previewPreset = "balanced"
+bassGain = "1"
+leadGain = "0.85"
+psgGain = "0.85"
+dacGain = "1"

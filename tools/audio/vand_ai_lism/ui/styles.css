@@ -57,6 +57,21 @@ button {
   cursor: pointer;
 }
 
+select,
+input[type="range"] {
+  accent-color: #f1b24a;
+}
+
+select {
+  width: 100%;
+  border: 1px solid #6f7788;
+  border-radius: 6px;
+  padding: 9px 10px;
+  background: #202633;
+  color: #f4f0e8;
+  font-weight: 700;
+}
+
 button:hover:not(:disabled) {
   border-color: #f1b24a;
   background: #2a3141;
@@ -299,6 +314,39 @@ li {
   margin-bottom: 16px;
 }
 
+.renderControls {
+  display: grid;
+  grid-template-columns: 180px repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid rgba(241, 178, 74, 0.24);
+  border-radius: 8px;
+  background: #171c26;
+}
+
+.renderControls label {
+  min-width: 0;
+}
+
+.renderControls span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.renderControls input {
+  width: 100%;
+}
+
+.renderControls strong {
+  display: block;
+  margin-top: 3px;
+  color: #f1b24a;
+  font-size: 12px;
+}
+
 .players article {
   padding: 14px;
 }
@@ -366,6 +414,7 @@ pre {
 @media (max-width: 900px) {
   .shell,
   .instrumentBank,
+  .renderControls,
   .players,
   .stats {
     grid-template-columns: 1fr;
