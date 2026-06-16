@@ -163,7 +163,7 @@ function setSummary(summary) {
   $("musicDrums").textContent = summary ? summary.drum_events || 0 : "-";
   $("loadDacBtn").disabled = !summary?.dac_preview;
   $("loadArrangementBtn").disabled = !summary?.arrangement;
-  $("loadNoteBtn").disabled = !summary?.note_arrangement;
+  $("loadNoteBtn").disabled = !(summary?.render_plan || summary?.note_arrangement);
 
   if (!summary) {
     $("exportList").textContent = "No analysis yet.";
@@ -384,24 +384,25 @@ async function loadArrangement() {
 }
 
 async function loadNote() {
-  if (!state.summary?.note_arrangement) return;
+  const previewPath = state.summary?.render_plan || state.summary?.note_arrangement;
+  if (!previewPath) return;
   const player = $("notePlayer");
   setBusy("noteProgress", "loadNoteBtn", true, "Rendering...");
-  setLog(`Rendering note preview...\n${state.summary.note_arrangement}`);
+  setLog(`Rendering note preview...\n${previewPath}`);
   try {
     await paint();
     player.src = await invoke("note_preview_data_url", {
-      path: state.summary.note_arrangement,
+      path: previewPath,
       bankPath: state.bankPath || "",
       ...readMixControls(),
     });
     await player.play();
-    setLog(`Playing note preview:\n${state.summary.note_arrangement}`);
+    setLog(`Playing note preview:\n${previewPath}`);
   } catch (err) {
     setLog(`Note preview failed:\n${err}`);
   } finally {
     setBusy("noteProgress", "loadNoteBtn", false);
-    $("loadNoteBtn").disabled = !state.summary?.note_arrangement;
+    $("loadNoteBtn").disabled = !(state.summary?.render_plan || state.summary?.note_arrangement);
   }
 }
 

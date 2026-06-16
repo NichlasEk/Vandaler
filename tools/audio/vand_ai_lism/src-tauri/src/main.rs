@@ -225,6 +225,50 @@ struct VandDrumEvent {
     dac_path: String,
 }
 
+#[derive(Deserialize)]
+struct VandRenderPlan {
+    #[serde(default = "default_sample_rate")]
+    sample_rate: u32,
+    #[serde(default = "default_arrangement_hop")]
+    hop: usize,
+    #[serde(default)]
+    total_frames: usize,
+    #[serde(default)]
+    instrument_bank: String,
+    tracks: Vec<VandRenderTrack>,
+    #[serde(default)]
+    drums: Vec<VandRenderDrum>,
+}
+
+#[derive(Deserialize)]
+struct VandRenderTrack {
+    role: String,
+    events: Vec<VandRenderNoteEvent>,
+}
+
+#[derive(Deserialize)]
+struct VandRenderNoteEvent {
+    start_frame: usize,
+    frames: usize,
+    hz: f32,
+    velocity: f32,
+    instrument_id: String,
+}
+
+#[derive(Deserialize)]
+struct VandRenderDrum {
+    start_frame: usize,
+    velocity: f32,
+    #[serde(default)]
+    psg_noise_amp: f32,
+    #[serde(default)]
+    psg_instrument_id: String,
+    #[serde(default)]
+    dac_chunk: Option<usize>,
+    #[serde(default)]
+    dac_path: String,
+}
+
 fn default_sample_rate() -> u32 {
     44_100
 }
@@ -600,6 +644,16 @@ fn load_instrument_bank_for_note_arrangement(
     )
 }
 
+fn load_instrument_bank_for_render_plan(
+    repo: &Path,
+    plan_path: &Path,
+    plan: &VandRenderPlan,
+    explicit_bank_path: &str,
+) -> Result<HashMap<String, VandInstrument>, String> {
+    let plan_dir = plan_path.parent().unwrap_or_else(|| Path::new("."));
+    load_instrument_bank_from_reference(repo, plan_dir, &plan.instrument_bank, explicit_bank_path)
+}
+
 fn load_instrument_bank_from_reference(
     repo: &Path,
     arrangement_dir: &Path,
@@ -624,6 +678,46 @@ fn load_instrument_bank_from_reference(
     }
 
     Ok(instruments)
+}
+
+fn render_plan_to_note_arrangement(plan: &VandRenderPlan) -> VandNoteArrangement {
+    let mut notes = Vec::new();
+    for track in &plan.tracks {
+        for event in &track.events {
+            notes.push(VandNoteEvent {
+                track: track.role.clone(),
+                start_frame: event.start_frame,
+                frames: event.frames,
+                hz: event.hz,
+                velocity: event.velocity,
+                instrument_id: event.instrument_id.clone(),
+            });
+        }
+    }
+    let drums = plan
+        .drums
+        .iter()
+        .map(|drum| VandDrumEvent {
+            start_frame: drum.start_frame,
+            velocity: drum.velocity,
+            noise_amp: drum.psg_noise_amp,
+            instrument_id: if drum.psg_instrument_id.is_empty() {
+                DEFAULT_NOISE_INSTRUMENT.to_string()
+            } else {
+                drum.psg_instrument_id.clone()
+            },
+            dac_chunk: drum.dac_chunk,
+            dac_path: drum.dac_path.clone(),
+        })
+        .collect();
+    VandNoteArrangement {
+        sample_rate: plan.sample_rate,
+        hop: plan.hop,
+        total_frames: plan.total_frames,
+        instrument_bank: plan.instrument_bank.clone(),
+        notes,
+        drums,
+    }
 }
 
 fn frame_sample_count(source_rate: u32, hop: usize) -> usize {
@@ -1198,14 +1292,23 @@ async fn note_preview_data_url(
         let arrangement_path = PathBuf::from(path);
         let text = fs::read_to_string(&arrangement_path)
             .map_err(|err| format!("failed to read {}: {err}", arrangement_path.display()))?;
-        let arrangement: VandNoteArrangement = serde_json::from_str(&text)
-            .map_err(|err| format!("invalid note arrangement JSON: {err}"))?;
-        let instruments = load_instrument_bank_for_note_arrangement(
-            &repo,
-            &arrangement_path,
-            &arrangement,
-            &bank_path,
-        )?;
+        let (arrangement, instruments) = if let Ok(plan) =
+            serde_json::from_str::<VandRenderPlan>(&text)
+        {
+            let instruments =
+                load_instrument_bank_for_render_plan(&repo, &arrangement_path, &plan, &bank_path)?;
+            (render_plan_to_note_arrangement(&plan), instruments)
+        } else {
+            let arrangement: VandNoteArrangement = serde_json::from_str(&text)
+                .map_err(|err| format!("invalid render plan or note arrangement JSON: {err}"))?;
+            let instruments = load_instrument_bank_for_note_arrangement(
+                &repo,
+                &arrangement_path,
+                &arrangement,
+                &bank_path,
+            )?;
+            (arrangement, instruments)
+        };
         let arrangement_dir = arrangement_path.parent().unwrap_or_else(|| Path::new("."));
         let mix = RenderMix {
             bass_gain: bass_gain.clamp(0.0, 2.0),
@@ -1354,6 +1457,59 @@ mod tests {
             .max()
             .unwrap_or(0);
         assert!(peak >= 18_000, "note preview peak too low: {peak}");
+    }
+
+    #[test]
+    fn renders_render_plan_with_core_bank() {
+        let repo = repo_root().expect("repo root");
+        let plan_path = repo.join("audio/converted/test-render-plan.vand-audio.json");
+        let plan = VandRenderPlan {
+            sample_rate: 44_100,
+            hop: 512,
+            total_frames: 96,
+            instrument_bank: DEFAULT_INSTRUMENT_BANK.to_string(),
+            tracks: vec![
+                VandRenderTrack {
+                    role: "bass".to_string(),
+                    events: vec![VandRenderNoteEvent {
+                        start_frame: 0,
+                        frames: 48,
+                        hz: 110.0,
+                        velocity: 0.8,
+                        instrument_id: DEFAULT_BASS_INSTRUMENT.to_string(),
+                    }],
+                },
+                VandRenderTrack {
+                    role: "lead".to_string(),
+                    events: vec![VandRenderNoteEvent {
+                        start_frame: 16,
+                        frames: 32,
+                        hz: 220.0,
+                        velocity: 0.7,
+                        instrument_id: DEFAULT_LEAD_INSTRUMENT.to_string(),
+                    }],
+                },
+            ],
+            drums: vec![VandRenderDrum {
+                start_frame: 24,
+                velocity: 0.8,
+                psg_noise_amp: 0.5,
+                psg_instrument_id: DEFAULT_NOISE_INSTRUMENT.to_string(),
+                dac_chunk: None,
+                dac_path: String::new(),
+            }],
+        };
+        let arrangement = render_plan_to_note_arrangement(&plan);
+        let instruments =
+            load_instrument_bank_for_render_plan(&repo, &plan_path, &plan, "").expect("core bank");
+        let samples = render_note_arrangement_samples(
+            &arrangement,
+            &instruments,
+            plan_path.parent().unwrap(),
+            RenderMix::default(),
+        );
+        assert!(!samples.is_empty());
+        assert!(samples.iter().any(|sample| *sample != 0));
     }
 
     #[test]
