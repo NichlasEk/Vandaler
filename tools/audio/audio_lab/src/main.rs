@@ -9,6 +9,9 @@ const DEFAULT_SECONDS: u32 = 5;
 const DEFAULT_RATE: u32 = 44_100;
 const ANALYSIS_FRAME: usize = 1024;
 const ANALYSIS_HOP: usize = 512;
+const PITCH_MIN_MIDI: i32 = 24;
+const PITCH_MAX_MIDI: i32 = 96;
+const PITCH_BINS: usize = (PITCH_MAX_MIDI - PITCH_MIN_MIDI + 1) as usize;
 const DAC_SAMPLE_RATE: u32 = 8_000;
 const PSG_CLOCK: f32 = 3_579_545.0;
 const DEFAULT_INSTRUMENT_BANK: &str =
@@ -390,8 +393,12 @@ struct AnalysisFrame {
     transient: f32,
     bass_hz: f32,
     bass_amp: f32,
+    mid_hz: f32,
+    mid_amp: f32,
     lead_hz: f32,
     lead_amp: f32,
+    high_hz: f32,
+    high_amp: f32,
     hook_hz: f32,
     hook_amp: f32,
     noise_amp: f32,
@@ -509,6 +516,7 @@ struct MusicalContext {
     bpm: f32,
     frames_per_beat: f32,
     grid_frames: usize,
+    grid_offset_frame: usize,
     loop_start_frame: usize,
     loop_end_frame: usize,
 }
@@ -1473,8 +1481,14 @@ fn detect_key(frames: &[AnalysisFrame]) -> (i32, &'static str, f32) {
         if let Some(midi) = hz_to_midi(frame.bass_hz) {
             histogram[midi.rem_euclid(12) as usize] += frame.bass_amp * 1.6;
         }
+        if let Some(midi) = hz_to_midi(frame.mid_hz) {
+            histogram[midi.rem_euclid(12) as usize] += frame.mid_amp * 1.15;
+        }
         if let Some(midi) = hz_to_midi(frame.lead_hz) {
             histogram[midi.rem_euclid(12) as usize] += frame.lead_amp;
+        }
+        if let Some(midi) = hz_to_midi(frame.high_hz) {
+            histogram[midi.rem_euclid(12) as usize] += frame.high_amp * 0.70;
         }
         if let Some(midi) = hz_to_midi(frame.hook_hz) {
             histogram[midi.rem_euclid(12) as usize] += frame.hook_amp * 1.25;
@@ -1570,11 +1584,39 @@ fn detect_bpm(frames: &[AnalysisFrame], sample_rate: u32) -> f32 {
     bpm.clamp(min_bpm, max_bpm)
 }
 
+fn detect_grid_offset(frames: &[AnalysisFrame], grid_frames: usize) -> usize {
+    if frames.is_empty() || grid_frames < 2 {
+        return 0;
+    }
+
+    let mut phase_scores = vec![0.0f32; grid_frames];
+    for frame in frames {
+        let tonal_onset = frame.transient * 1.20
+            + frame.bass_amp * 0.10
+            + frame.mid_amp * 0.08
+            + frame.lead_amp * 0.08
+            + frame.noise_amp * 0.20;
+        let weight = tonal_onset * frame.rms.sqrt();
+        if weight <= 0.005 {
+            continue;
+        }
+        phase_scores[frame.index % grid_frames] += weight;
+    }
+
+    phase_scores
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(phase, _)| phase)
+        .unwrap_or(0)
+}
+
 fn analyse_musical_context(frames: &[AnalysisFrame], sample_rate: u32) -> MusicalContext {
     let (key_root, mode, key_confidence) = detect_key(frames);
     let bpm = detect_bpm(frames, sample_rate);
     let frames_per_beat = (sample_rate as f32 * 60.0) / (bpm * ANALYSIS_HOP as f32);
     let grid_frames = (frames_per_beat / 4.0).round().max(2.0) as usize;
+    let grid_offset_frame = detect_grid_offset(frames, grid_frames);
     let bar_frames = (frames_per_beat * 4.0).round().max(16.0) as usize;
     let min_loop_frames = bar_frames * 4;
     let mut loop_end_frame = frames.len() / bar_frames * bar_frames;
@@ -1589,18 +1631,29 @@ fn analyse_musical_context(frames: &[AnalysisFrame], sample_rate: u32) -> Musica
         bpm,
         frames_per_beat,
         grid_frames,
+        grid_offset_frame,
         loop_start_frame: 0,
         loop_end_frame: loop_end_frame.max(1),
     }
 }
 
-fn snap_frame_to_grid(frame: usize, grid_frames: usize, max_shift: usize) -> usize {
+fn snap_frame_to_grid(
+    frame: usize,
+    grid_frames: usize,
+    max_shift: usize,
+    grid_offset_frame: usize,
+) -> usize {
     if grid_frames < 2 {
         return frame;
     }
-    let lower = frame / grid_frames * grid_frames;
+    let offset = grid_offset_frame.min(grid_frames - 1);
+    let lower = if frame <= offset {
+        offset
+    } else {
+        offset + ((frame - offset) / grid_frames) * grid_frames
+    };
     let upper = lower + grid_frames;
-    let nearest = if frame - lower <= upper - frame {
+    let nearest = if frame.abs_diff(lower) <= frame.abs_diff(upper) {
         lower
     } else {
         upper
@@ -1655,36 +1708,71 @@ fn harmonic_note_power(frame: &[f32], sample_rate: u32, hz: f32, bass: bool) -> 
     }
 }
 
-fn best_note_power(
-    frame: &[f32],
-    sample_rate: u32,
+fn frame_pitch_powers(frame: &[f32], sample_rate: u32) -> [f32; PITCH_BINS] {
+    let mut powers = [0.0f32; PITCH_BINS];
+    for midi in PITCH_MIN_MIDI..=PITCH_MAX_MIDI {
+        let hz = midi_to_hz(midi);
+        let bass = midi <= 57;
+        let mut power = harmonic_note_power(frame, sample_rate, hz, bass);
+        if midi >= 60 {
+            let register_bias =
+                0.92 + ((midi - 60) as f32 / (PITCH_MAX_MIDI - 60).max(1) as f32) * 0.18;
+            power *= register_bias;
+        }
+        powers[(midi - PITCH_MIN_MIDI) as usize] = power;
+    }
+    powers
+}
+
+fn best_power_in_bins(
+    powers: &[f32; PITCH_BINS],
     lo_midi: i32,
     hi_midi: i32,
-    bass: bool,
+    avoid_midi: &[i32],
 ) -> (f32, f32) {
-    let mut best_hz = 0.0;
+    let mut best_midi = 0;
     let mut best_power = 0.0;
     let mut second_power = 0.0;
-    for midi in lo_midi..=hi_midi {
-        let hz = midi_to_hz(midi);
-        let mut power = harmonic_note_power(frame, sample_rate, hz, bass);
-        if !bass {
-            let register_bias =
-                0.88 + ((midi - lo_midi) as f32 / (hi_midi - lo_midi).max(1) as f32) * 0.24;
-            power *= register_bias;
+    for midi in lo_midi.max(PITCH_MIN_MIDI)..=hi_midi.min(PITCH_MAX_MIDI) {
+        let mut power = powers[(midi - PITCH_MIN_MIDI) as usize];
+        for avoided in avoid_midi {
+            let distance = (midi - *avoided).abs();
+            if distance == 0 {
+                power *= 0.18;
+            } else if distance == 12 {
+                power *= 0.45;
+            } else if distance == 7 || distance == 5 {
+                power *= 0.82;
+            }
         }
         if power > best_power {
             second_power = best_power;
             best_power = power;
-            best_hz = hz;
+            best_midi = midi;
         } else if power > second_power {
             second_power = power;
         }
     }
-    if best_power < second_power * 1.05 {
-        best_power *= 0.75;
+    if best_power < second_power * 1.04 {
+        best_power *= 0.72;
     }
-    (best_hz, best_power)
+    let hz = if best_power > 0.0 {
+        midi_to_hz(best_midi)
+    } else {
+        0.0
+    };
+    (hz, best_power)
+}
+
+fn pitch_flux(previous: Option<&[f32; PITCH_BINS]>, current: &[f32; PITCH_BINS]) -> f32 {
+    let Some(previous) = previous else {
+        return 0.0;
+    };
+    let mut flux = 0.0;
+    for (prev, now) in previous.iter().zip(current.iter()) {
+        flux += (now - prev).max(0.0);
+    }
+    flux / PITCH_BINS as f32
 }
 
 fn classify_frame(
@@ -1724,34 +1812,62 @@ fn analyse_samples(wav: &WavData) -> Vec<AnalysisFrame> {
     let mut raw = Vec::new();
     let mut max_rms = 1e-6f32;
     let mut max_tonal = 1e-6f32;
+    let mut max_flux = 1e-6f32;
     let mut prev_rms = 0.0f32;
+    let mut prev_powers: Option<[f32; PITCH_BINS]> = None;
     let mut index = 0usize;
     let mut start = 0usize;
 
     while start + ANALYSIS_FRAME <= padded.len() {
         let frame = &padded[start..start + ANALYSIS_FRAME];
         let rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
-        let transient = ((rms - prev_rms).max(0.0) / (prev_rms + 0.012)).min(1.0);
-        let (bass_hz, bass_power) = best_note_power(frame, wav.sample_rate, 29, 57, true);
-        let (lead_hz, lead_power) = best_note_power(frame, wav.sample_rate, 60, 92, false);
-        let (hook_hz, hook_power) = best_note_power(frame, wav.sample_rate, 67, 96, false);
-        let high_power = [2200.0, 3200.0, 4600.0, 6200.0, 7800.0]
+        let rms_transient = ((rms - prev_rms).max(0.0) / (prev_rms + 0.012)).min(1.0);
+        let powers = frame_pitch_powers(frame, wav.sample_rate);
+        let flux = pitch_flux(prev_powers.as_ref(), &powers);
+        let (bass_hz, bass_power) = best_power_in_bins(&powers, 29, 57, &[]);
+        let bass_midi = hz_to_midi(bass_hz).unwrap_or(0);
+        let (mid_hz, mid_power) = best_power_in_bins(&powers, 48, 76, &[bass_midi]);
+        let mid_midi = hz_to_midi(mid_hz).unwrap_or(0);
+        let (lead_hz, lead_power) = best_power_in_bins(&powers, 60, 92, &[bass_midi, mid_midi]);
+        let lead_midi = hz_to_midi(lead_hz).unwrap_or(0);
+        let (high_hz, upper_power) =
+            best_power_in_bins(&powers, 72, 96, &[bass_midi, mid_midi, lead_midi]);
+        let (hook_hz, hook_power) = best_power_in_bins(&powers, 67, 96, &[bass_midi, mid_midi]);
+        let noise_band_power = [2200.0, 3200.0, 4600.0, 6200.0, 7800.0]
             .iter()
             .map(|hz| goertzel_power(frame, wav.sample_rate, *hz))
             .sum::<f32>()
             / 5.0;
 
         max_rms = max_rms.max(rms);
+        max_flux = max_flux.max(flux);
         max_tonal = max_tonal
             .max(bass_power)
+            .max(mid_power)
             .max(lead_power)
+            .max(upper_power)
             .max(hook_power)
-            .max(high_power);
+            .max(noise_band_power);
         raw.push((
-            index, start, rms, transient, bass_hz, bass_power, lead_hz, lead_power, hook_hz,
-            hook_power, high_power,
+            index,
+            start,
+            rms,
+            rms_transient,
+            flux,
+            bass_hz,
+            bass_power,
+            mid_hz,
+            mid_power,
+            lead_hz,
+            lead_power,
+            high_hz,
+            upper_power,
+            hook_hz,
+            hook_power,
+            noise_band_power,
         ));
         prev_rms = rms;
+        prev_powers = Some(powers);
         index += 1;
         start += ANALYSIS_HOP;
     }
@@ -1762,27 +1878,37 @@ fn analyse_samples(wav: &WavData) -> Vec<AnalysisFrame> {
                 index,
                 start,
                 rms,
-                transient,
+                rms_transient,
+                flux,
                 bass_hz,
                 bass_power,
+                mid_hz,
+                mid_power,
                 lead_hz,
                 lead_power,
+                high_hz,
+                high_power,
                 hook_hz,
                 hook_power,
-                high_power,
+                noise_power,
             )| {
+                let transient = rms_transient.max((flux / max_flux) * 0.72).min(1.0);
                 let bass_amp = (bass_power / max_tonal).min(1.0);
+                let mid_amp = (mid_power / max_tonal).min(1.0);
                 let lead_amp = (lead_power / max_tonal).min(1.0);
+                let high_amp = (high_power / max_tonal).min(1.0);
                 let hook_amp = (hook_power / max_tonal).min(1.0);
-                let noise_amp = ((high_power / max_tonal) * (rms / max_rms).sqrt()).min(1.0);
+                let noise_amp = ((noise_power / max_tonal) * (rms / max_rms).sqrt()).min(1.0);
                 let bass_hz = if bass_amp > 0.07 { bass_hz } else { 0.0 };
+                let mid_hz = if mid_amp > 0.06 { mid_hz } else { 0.0 };
                 let lead_hz = if lead_amp > 0.07 { lead_hz } else { 0.0 };
+                let high_hz = if high_amp > 0.055 { high_hz } else { 0.0 };
                 let hook_hz = if hook_amp > 0.055 { hook_hz } else { 0.0 };
                 let class_name = classify_frame(
                     rms / max_rms,
                     transient,
                     bass_amp,
-                    lead_amp.max(hook_amp),
+                    lead_amp.max(mid_amp).max(high_amp).max(hook_amp),
                     noise_amp,
                 );
                 AnalysisFrame {
@@ -1792,8 +1918,12 @@ fn analyse_samples(wav: &WavData) -> Vec<AnalysisFrame> {
                     transient,
                     bass_hz,
                     bass_amp,
+                    mid_hz,
+                    mid_amp,
                     lead_hz,
                     lead_amp,
+                    high_hz,
+                    high_amp,
                     hook_hz,
                     hook_amp,
                     noise_amp,
@@ -2122,9 +2252,10 @@ fn build_render_plan_runtime_events(
 ) -> Vec<RuntimeEvent> {
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, sample_rate, chunks);
-    let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
-    let chord_notes = build_chord_body_notes(&bass_notes, &lead_notes, &context);
-    let counter_notes = build_counter_melody_notes(&lead_notes, &context);
+    let pad_notes = build_spectral_pad_notes(frames, &bass_notes, &lead_notes, &context);
+    let chord_notes =
+        build_spectral_chord_notes(frames, &bass_notes, &lead_notes, &pad_notes, &context);
+    let counter_notes = build_spectral_counter_notes(frames, &lead_notes, &context);
     let hook_notes = build_hook_notes(frames, &context);
     let psg_lead_notes = build_psg_lead_notes(&hook_notes);
     let psg_counter_notes = build_psg_counter_notes(&counter_notes);
@@ -2775,7 +2906,9 @@ fn write_analysis_json(
                 "    {{\"index\": {}, \"t\": {:.6}, \"class\": \"{}\", ",
                 "\"rms\": {:.5}, \"transient\": {:.5}, ",
                 "\"bass_hz\": {:.3}, \"bass_note\": \"{}\", \"bass_amp\": {:.5}, \"bass_instrument_id\": \"{}\", ",
+                "\"mid_hz\": {:.3}, \"mid_note\": \"{}\", \"mid_amp\": {:.5}, ",
                 "\"lead_hz\": {:.3}, \"lead_note\": \"{}\", \"lead_amp\": {:.5}, \"lead_instrument_id\": \"{}\", ",
+                "\"high_hz\": {:.3}, \"high_note\": \"{}\", \"high_amp\": {:.5}, ",
                 "\"hook_hz\": {:.3}, \"hook_note\": \"{}\", \"hook_amp\": {:.5}, ",
                 "\"noise_amp\": {:.5}, \"noise_instrument_id\": \"{}\"}}{}\n"
             ),
@@ -2792,6 +2925,9 @@ fn write_analysis_json(
             } else {
                 ""
             },
+            frame.mid_hz,
+            note_name(frame.mid_hz),
+            frame.mid_amp,
             frame.lead_hz,
             note_name(frame.lead_hz),
             frame.lead_amp,
@@ -2800,6 +2936,9 @@ fn write_analysis_json(
             } else {
                 ""
             },
+            frame.high_hz,
+            note_name(frame.high_hz),
+            frame.high_amp,
             frame.hook_hz,
             note_name(frame.hook_hz),
             frame.hook_amp,
@@ -2835,6 +2974,8 @@ fn stable_midi_candidates(
     for frame in frames {
         let (hz, amp) = match track {
             "bass" => (frame.bass_hz, frame.bass_amp),
+            "mid" => (frame.mid_hz, frame.mid_amp),
+            "high" => (frame.high_hz, frame.high_amp),
             "hook" => (frame.hook_hz, frame.hook_amp),
             _ => (frame.lead_hz, frame.lead_amp),
         };
@@ -2888,7 +3029,7 @@ fn stable_midi_candidates(
 
         let confirm_frames = if track == "bass" {
             4
-        } else if track == "hook" {
+        } else if matches!(track, "hook" | "high") {
             2
         } else {
             3
@@ -3024,8 +3165,18 @@ fn quantize_note_grid(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<No
     let mut quantized = Vec::with_capacity(notes.len());
     for mut note in notes {
         let end = note.start_frame.saturating_add(note.frames);
-        let snapped_start = snap_frame_to_grid(note.start_frame, context.grid_frames, max_shift);
-        let snapped_end = snap_frame_to_grid(end, context.grid_frames, max_shift);
+        let snapped_start = snap_frame_to_grid(
+            note.start_frame,
+            context.grid_frames,
+            max_shift,
+            context.grid_offset_frame,
+        );
+        let snapped_end = snap_frame_to_grid(
+            end,
+            context.grid_frames,
+            max_shift,
+            context.grid_offset_frame,
+        );
         if snapped_end > snapped_start {
             note.start_frame = snapped_start;
             note.frames = snapped_end - snapped_start;
@@ -3063,6 +3214,51 @@ fn note_overlap_frames(a: &NoteEvent, b: &NoteEvent) -> usize {
     a_end
         .min(b_end)
         .saturating_sub(a.start_frame.max(b.start_frame))
+}
+
+fn overlaps_near_pitch(note: &NoteEvent, other: &NoteEvent, semitones: i32) -> bool {
+    note_overlap_frames(note, other) * 3 >= note.frames.min(other.frames)
+        && (note.midi - other.midi).abs() <= semitones
+}
+
+fn filter_spectral_notes(
+    mut notes: Vec<NoteEvent>,
+    blockers: &[NoteEvent],
+    min_frames: usize,
+    min_velocity: f32,
+    velocity_scale: f32,
+    track: &'static str,
+    instrument_id: &'static str,
+    min_midi: i32,
+    max_midi: i32,
+    context: &MusicalContext,
+) -> Vec<NoteEvent> {
+    notes.sort_by_key(|note| note.start_frame);
+    let mut out = Vec::new();
+    for mut note in notes {
+        if note.frames < min_frames || note.velocity < min_velocity {
+            continue;
+        }
+        if blockers
+            .iter()
+            .any(|blocker| overlaps_near_pitch(&note, blocker, 2))
+        {
+            continue;
+        }
+        note.track = track;
+        note.midi = snap_midi_to_scale(
+            fold_midi_to_range(note.midi, min_midi, max_midi),
+            context.key_root,
+            context.mode,
+            min_midi,
+            max_midi,
+        );
+        note.hz = midi_to_hz(note.midi);
+        note.velocity = (note.velocity * velocity_scale).clamp(0.06, 0.56);
+        note.instrument_id = instrument_id;
+        out.push(note);
+    }
+    merge_neighbor_notes(out)
 }
 
 fn filter_lead_notes_against_bass(
@@ -3176,6 +3372,38 @@ fn build_harmony_pad_notes(
     merge_neighbor_notes(out)
 }
 
+fn build_spectral_pad_notes(
+    frames: &[AnalysisFrame],
+    bass_notes: &[NoteEvent],
+    lead_notes: &[NoteEvent],
+    context: &MusicalContext,
+) -> Vec<NoteEvent> {
+    let blockers = bass_notes
+        .iter()
+        .chain(lead_notes.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let min_frames = (context.frames_per_beat * 0.55).round().max(6.0) as usize;
+    let notes = build_note_events_for_track(frames, "mid", 48, 76, DEFAULT_PAD_INSTRUMENT, context);
+    let spectral = filter_spectral_notes(
+        notes,
+        &blockers,
+        min_frames,
+        0.09,
+        0.48,
+        "pad",
+        DEFAULT_PAD_INSTRUMENT,
+        48,
+        76,
+        context,
+    );
+    if spectral.len() >= bass_notes.len().min(8) / 3 {
+        spectral
+    } else {
+        build_harmony_pad_notes(bass_notes, lead_notes, context)
+    }
+}
+
 fn build_chord_body_notes(
     bass_notes: &[NoteEvent],
     lead_notes: &[NoteEvent],
@@ -3217,6 +3445,40 @@ fn build_chord_body_notes(
     merge_neighbor_notes(out)
 }
 
+fn build_spectral_chord_notes(
+    frames: &[AnalysisFrame],
+    bass_notes: &[NoteEvent],
+    lead_notes: &[NoteEvent],
+    pad_notes: &[NoteEvent],
+    context: &MusicalContext,
+) -> Vec<NoteEvent> {
+    let blockers = bass_notes
+        .iter()
+        .chain(lead_notes.iter())
+        .chain(pad_notes.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let min_frames = (context.frames_per_beat * 0.45).round().max(5.0) as usize;
+    let notes = build_note_events_for_track(frames, "mid", 52, 84, DEFAULT_PAD_INSTRUMENT, context);
+    let spectral = filter_spectral_notes(
+        notes,
+        &blockers,
+        min_frames,
+        0.11,
+        0.36,
+        "chord",
+        DEFAULT_PAD_INSTRUMENT,
+        52,
+        84,
+        context,
+    );
+    if spectral.len() >= bass_notes.len().min(8) / 4 {
+        spectral
+    } else {
+        build_chord_body_notes(bass_notes, lead_notes, context)
+    }
+}
+
 fn build_counter_melody_notes(
     lead_notes: &[NoteEvent],
     context: &MusicalContext,
@@ -3251,6 +3513,33 @@ fn build_counter_melody_notes(
     }
 
     merge_neighbor_notes(out)
+}
+
+fn build_spectral_counter_notes(
+    frames: &[AnalysisFrame],
+    lead_notes: &[NoteEvent],
+    context: &MusicalContext,
+) -> Vec<NoteEvent> {
+    let min_frames = (context.frames_per_beat * 0.32).round().max(4.0) as usize;
+    let notes =
+        build_note_events_for_track(frames, "high", 67, 96, DEFAULT_LEAD_INSTRUMENT, context);
+    let spectral = filter_spectral_notes(
+        notes,
+        lead_notes,
+        min_frames,
+        0.08,
+        0.42,
+        "counter",
+        DEFAULT_LEAD_INSTRUMENT,
+        60,
+        96,
+        context,
+    );
+    if spectral.len() >= lead_notes.len().min(8) / 4 {
+        spectral
+    } else {
+        build_counter_melody_notes(lead_notes, context)
+    }
 }
 
 fn build_hook_notes(frames: &[AnalysisFrame], context: &MusicalContext) -> Vec<NoteEvent> {
@@ -3371,7 +3660,12 @@ fn lock_bass_pattern(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<Not
 fn quantize_drum_events(mut drums: Vec<DrumEvent>, context: &MusicalContext) -> Vec<DrumEvent> {
     let max_shift = (context.grid_frames / 2).max(1);
     for drum in &mut drums {
-        drum.start_frame = snap_frame_to_grid(drum.start_frame, context.grid_frames, max_shift);
+        drum.start_frame = snap_frame_to_grid(
+            drum.start_frame,
+            context.grid_frames,
+            max_shift,
+            context.grid_offset_frame,
+        );
         drum.velocity = drum.velocity.clamp(0.12, 0.95);
         drum.noise_amp = drum.noise_amp.clamp(0.08, 0.90);
     }
@@ -3478,9 +3772,10 @@ fn write_preview_report_json(
     }
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, wav.sample_rate, chunks);
-    let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
-    let chord_notes = build_chord_body_notes(&bass_notes, &lead_notes, &context);
-    let counter_notes = build_counter_melody_notes(&lead_notes, &context);
+    let pad_notes = build_spectral_pad_notes(frames, &bass_notes, &lead_notes, &context);
+    let chord_notes =
+        build_spectral_chord_notes(frames, &bass_notes, &lead_notes, &pad_notes, &context);
+    let counter_notes = build_spectral_counter_notes(frames, &lead_notes, &context);
     let hook_notes = build_hook_notes(frames, &context);
     let psg_lead_notes = build_psg_lead_notes(&hook_notes);
     let psg_counter_notes = build_psg_counter_notes(&counter_notes);
@@ -3523,6 +3818,7 @@ fn write_preview_report_json(
             "  \"bpm\": {:.3},\n",
             "  \"frames_per_beat\": {:.3},\n",
             "  \"grid_frames\": {},\n",
+            "  \"grid_offset_frame\": {},\n",
             "  \"loop_start_frame\": {},\n",
             "  \"loop_end_frame\": {},\n",
             "  \"loop_start\": {:.6},\n",
@@ -3553,6 +3849,7 @@ fn write_preview_report_json(
         context.bpm,
         context.frames_per_beat,
         context.grid_frames,
+        context.grid_offset_frame,
         context.loop_start_frame,
         context.loop_end_frame,
         context.loop_start_frame as f32 * ANALYSIS_HOP as f32 / wav.sample_rate as f32,
@@ -3589,9 +3886,10 @@ fn write_note_arrangement_json(
 
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, wav.sample_rate, chunks);
-    let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
-    let chord_notes = build_chord_body_notes(&bass_notes, &lead_notes, &context);
-    let counter_notes = build_counter_melody_notes(&lead_notes, &context);
+    let pad_notes = build_spectral_pad_notes(frames, &bass_notes, &lead_notes, &context);
+    let chord_notes =
+        build_spectral_chord_notes(frames, &bass_notes, &lead_notes, &pad_notes, &context);
+    let counter_notes = build_spectral_counter_notes(frames, &lead_notes, &context);
     let hook_notes = build_hook_notes(frames, &context);
     let psg_lead_notes = build_psg_lead_notes(&hook_notes);
     let psg_counter_notes = build_psg_counter_notes(&counter_notes);
@@ -3620,7 +3918,7 @@ fn write_note_arrangement_json(
         concat!(
             "  \"analysis\": {{\"key\": \"{} {}\", \"key_root\": {}, \"mode\": \"{}\", ",
             "\"key_confidence\": {:.5}, \"bpm\": {:.3}, \"frames_per_beat\": {:.3}, ",
-            "\"grid_frames\": {}, \"loop_start_frame\": {}, \"loop_end_frame\": {}, ",
+            "\"grid_frames\": {}, \"grid_offset_frame\": {}, \"loop_start_frame\": {}, \"loop_end_frame\": {}, ",
             "\"bass_notes\": {}, \"lead_notes\": {}, \"hook_notes\": {}, \"pad_notes\": {}, ",
             "\"chord_notes\": {}, \"counter_notes\": {}, \"psg_lead_notes\": {}, ",
             "\"psg_counter_notes\": {}, \"psg_bass_notes\": {}, \"drum_events\": {}, ",
@@ -3634,6 +3932,7 @@ fn write_note_arrangement_json(
         context.bpm,
         context.frames_per_beat,
         context.grid_frames,
+        context.grid_offset_frame,
         context.loop_start_frame,
         context.loop_end_frame,
         bass_notes.len(),
@@ -3733,9 +4032,10 @@ fn write_render_plan_json(
 
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, wav.sample_rate, chunks);
-    let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
-    let chord_notes = build_chord_body_notes(&bass_notes, &lead_notes, &context);
-    let counter_notes = build_counter_melody_notes(&lead_notes, &context);
+    let pad_notes = build_spectral_pad_notes(frames, &bass_notes, &lead_notes, &context);
+    let chord_notes =
+        build_spectral_chord_notes(frames, &bass_notes, &lead_notes, &pad_notes, &context);
+    let counter_notes = build_spectral_counter_notes(frames, &lead_notes, &context);
     let hook_notes = build_hook_notes(frames, &context);
     let psg_lead_notes = build_psg_lead_notes(&hook_notes);
     let psg_counter_notes = build_psg_counter_notes(&counter_notes);
@@ -3757,8 +4057,8 @@ fn write_render_plan_json(
         DEFAULT_INSTRUMENT_BANK
     ));
     out.push_str(&format!(
-        "  \"tempo\": {{\"bpm\": {:.3}, \"frames_per_beat\": {:.3}, \"grid_frames\": {}}},\n",
-        context.bpm, context.frames_per_beat, context.grid_frames
+        "  \"tempo\": {{\"bpm\": {:.3}, \"frames_per_beat\": {:.3}, \"grid_frames\": {}, \"grid_offset_frame\": {}}},\n",
+        context.bpm, context.frames_per_beat, context.grid_frames, context.grid_offset_frame
     ));
     out.push_str(&format!(
         "  \"loop\": {{\"start_frame\": {}, \"end_frame\": {}, \"start\": {:.6}, \"end\": {:.6}}},\n",
