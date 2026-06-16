@@ -1,6 +1,7 @@
 use euther_oxide::audio::Audio;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -57,6 +58,24 @@ impl Default for AudioLabSettings {
 
 fn default_output_dir() -> String {
     "audio/converted".to_string()
+}
+
+fn set_default_env(key: &str, value: &str) {
+    if env::var_os(key).is_none() {
+        // This runs before Tauri/WebKitGTK starts worker threads.
+        unsafe {
+            env::set_var(key, value);
+        }
+    }
+}
+
+fn configure_native_wayland_environment() {
+    set_default_env("GDK_BACKEND", "wayland");
+    set_default_env("GTK_THEME", "Adwaita");
+    set_default_env("GTK_IM_MODULE", "gtk-im-context-simple");
+    set_default_env("QT_IM_MODULE", "simple");
+    set_default_env("XMODIFIERS", "@im=none");
+    set_default_env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
 }
 
 #[derive(Serialize)]
@@ -1060,38 +1079,101 @@ where
         .map_err(|err| format!("background task failed: {err}"))?
 }
 
-#[tauri::command]
-fn pick_audio_file() -> Option<String> {
-    rfd::FileDialog::new()
-        .set_title("Open audio")
-        .add_filter("Audio", &["mp3", "ogg", "wav", "flac", "aiff", "aif"])
-        .pick_file()
-        .map(|path| path.display().to_string())
+fn trim_dialog_path(bytes: &[u8]) -> Option<String> {
+    let path = String::from_utf8_lossy(bytes).trim().to_string();
+    if path.is_empty() { None } else { Some(path) }
+}
+
+fn run_dialog_command(command: &mut Command) -> Result<Option<String>, String> {
+    match command.output() {
+        Ok(output) if output.status.success() => Ok(trim_dialog_path(&output.stdout)),
+        Ok(output) if output.status.code() == Some(1) => Ok(None),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if stderr.is_empty() {
+                Ok(None)
+            } else {
+                Err(stderr)
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn pick_file_native(title: &str, filters: &[&str]) -> Result<Option<String>, String> {
+    let mut zenity = Command::new("zenity");
+    zenity
+        .arg("--file-selection")
+        .arg("--title")
+        .arg(title)
+        .arg("--filename")
+        .arg("audio/source/");
+    if !filters.is_empty() {
+        zenity.arg(format!("--file-filter=Audio files | {}", filters.join(" ")));
+    }
+    zenity.arg("--file-filter=All files | *");
+    match run_dialog_command(&mut zenity) {
+        Ok(Some(path)) => return Ok(Some(path)),
+        Ok(None) => {}
+        Err(err) => eprintln!("zenity file picker failed: {err}"),
+    }
+
+    let mut kdialog = Command::new("kdialog");
+    kdialog.arg("--title").arg(title).arg("--getopenfilename");
+    if !filters.is_empty() {
+        kdialog.arg("audio/source/").arg(filters.join(" "));
+    } else {
+        kdialog.arg("audio/source/");
+    }
+    run_dialog_command(&mut kdialog)
+}
+
+fn pick_folder_native(title: &str, initial: &str) -> Result<Option<String>, String> {
+    let mut zenity = Command::new("zenity");
+    zenity
+        .arg("--file-selection")
+        .arg("--directory")
+        .arg("--title")
+        .arg(title)
+        .arg("--filename")
+        .arg(initial);
+    match run_dialog_command(&mut zenity) {
+        Ok(Some(path)) => return Ok(Some(path)),
+        Ok(None) => {}
+        Err(err) => eprintln!("zenity folder picker failed: {err}"),
+    }
+
+    let mut kdialog = Command::new("kdialog");
+    kdialog
+        .arg("--title")
+        .arg(title)
+        .arg("--getexistingdirectory")
+        .arg(initial);
+    run_dialog_command(&mut kdialog)
 }
 
 #[tauri::command]
-fn pick_output_dir() -> Option<String> {
-    rfd::FileDialog::new()
-        .set_title("Choose output folder")
-        .pick_folder()
-        .map(|path| path.display().to_string())
+fn pick_audio_file() -> Result<Option<String>, String> {
+    pick_file_native(
+        "Open audio",
+        &["*.mp3", "*.ogg", "*.wav", "*.flac", "*.aiff", "*.aif"],
+    )
 }
 
 #[tauri::command]
-fn pick_instrument_dir() -> Option<String> {
-    rfd::FileDialog::new()
-        .set_title("Choose Furnace instrument folder")
-        .pick_folder()
-        .map(|path| path.display().to_string())
+fn pick_output_dir() -> Result<Option<String>, String> {
+    pick_folder_native("Choose output folder", "audio/converted/")
 }
 
 #[tauri::command]
-fn pick_instrument_bank() -> Option<String> {
-    rfd::FileDialog::new()
-        .set_title("Open Vand-AI-lism instrument bank")
-        .add_filter("Vand instrument bank", &["json"])
-        .pick_file()
-        .map(|path| path.display().to_string())
+fn pick_instrument_dir() -> Result<Option<String>, String> {
+    pick_folder_native("Choose Furnace instrument folder", "audio/instruments/")
+}
+
+#[tauri::command]
+fn pick_instrument_bank() -> Result<Option<String>, String> {
+    pick_file_native("Open Vand-AI-lism instrument bank", &["*.json"])
 }
 
 fn read_instrument_bank(path: &Path) -> Result<InstrumentBankManifest, String> {
@@ -1357,6 +1439,8 @@ async fn note_preview_data_url(
 }
 
 fn main() {
+    configure_native_wayland_environment();
+
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             pick_audio_file,

@@ -35,7 +35,7 @@ audio-gui:
 	cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- gui
 
 audio-tauri:
-	WEBKIT_DISABLE_DMABUF_RENDERER=1 GDK_BACKEND=x11 cargo run --manifest-path tools/audio/vand_ai_lism/src-tauri/Cargo.toml
+	GDK_BACKEND=wayland GTK_THEME=Adwaita GTK_IM_MODULE=gtk-im-context-simple QT_IM_MODULE=simple XMODIFIERS=@im=none WEBKIT_DISABLE_DMABUF_RENDERER=1 cargo run --manifest-path tools/audio/vand_ai_lism/src-tauri/Cargo.toml
 
 audio-analyse-test:
 	cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-audio out/audio-test.wav --out out/audio-test-analysis.vand-audio.json

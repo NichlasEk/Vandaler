@@ -12,6 +12,9 @@ __pycache__/
 *.pyc
 audio/converted/*
 !audio/converted/.gitkeep
+audio/source/**/*
+!audio/source/**/
+!audio/source/**/.gitkeep
 tools/audio/audio_lab/target/
 tools/audio/oxide_probe/target/
 tools/audio/vand_ai_lism/settings.toml
