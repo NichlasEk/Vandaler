@@ -78,6 +78,7 @@ struct AnalysisSummary {
     bundle_dir: String,
     import_metadata: String,
     dac_preview: String,
+    runtime_preview: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -1177,6 +1178,7 @@ async fn analyse_audio(input: String, output_dir: String) -> Result<AnalysisResu
             loop_end: preview_report.loop_end,
             import_metadata: bundle_dir.join("import.json").display().to_string(),
             dac_preview: bundle_dir.join("dac_preview.wav").display().to_string(),
+            runtime_preview: bundle_dir.join("runtime_preview.wav").display().to_string(),
             bundle_dir: bundle_dir.display().to_string(),
         };
 

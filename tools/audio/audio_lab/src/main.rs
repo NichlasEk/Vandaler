@@ -435,6 +435,7 @@ struct AnalysisSummary {
     bundle_dir: PathBuf,
     import_metadata: PathBuf,
     dac_preview: PathBuf,
+    runtime_preview: PathBuf,
 }
 
 #[derive(Clone)]
@@ -2275,6 +2276,96 @@ fn write_dac_preview_wav(bundle_dir: &Path, chunks: &[DacChunk]) -> io::Result<P
     Ok(path)
 }
 
+fn hz_from_ym2612_pitch(fnum: u16, block: u8) -> f32 {
+    if fnum == 0 || block == 0 {
+        return 0.0;
+    }
+
+    let base = 7_670_454.0 / 144.0;
+    let divider = 2.0f32.powi(block as i32 - 1);
+    (fnum as f32 * base * divider) / (1u32 << 20) as f32
+}
+
+fn write_runtime_preview_wav(
+    bundle_dir: &Path,
+    events: &[RuntimeEvent],
+    chunks: &[DacChunk],
+) -> io::Result<PathBuf> {
+    const PREVIEW_RATE: u32 = 44_100;
+    let path = bundle_dir.join("runtime_preview.wav");
+    let mut stereo = Vec::new();
+    let mut bass_phase = 0.0f32;
+    let mut lead_phase = 0.0f32;
+    let mut noise_state = 0x1234ABCDu32;
+    let mut dac_active: Option<(&[u8], usize, u32)> = None;
+    let mut dac_rate_accum = 0u32;
+
+    for event in events {
+        if event.dac_chunk != 255 && event.dac_level > 0 {
+            dac_active = chunks
+                .iter()
+                .find(|chunk| chunk.id == event.dac_chunk as usize)
+                .map(|chunk| (chunk.samples.as_slice(), 0usize, chunk.sample_rate.max(1)));
+            dac_rate_accum = 0;
+        }
+
+        let samples = ((event.frames as u64 * PREVIEW_RATE as u64 + 30) / 60).max(1) as usize;
+        let bass_hz = hz_from_ym2612_pitch(event.fm0_fnum, event.fm0_block);
+        let lead_hz = hz_from_ym2612_pitch(event.fm1_fnum, event.fm1_block);
+        let bass_gain = event.fm0_level as f32 / 15.0 * 0.35;
+        let lead_gain = event.fm1_level as f32 / 15.0 * 0.28;
+        let noise_gain = event.psg_noise_level as f32 / 15.0 * 0.18;
+        let dac_gain = event.dac_level as f32 / 15.0 * 0.50;
+
+        for _ in 0..samples {
+            let mut sample = 0.0f32;
+
+            if bass_hz > 0.0 && event.fm0_level > 0 {
+                sample += bass_phase.sin() * bass_gain;
+                bass_phase += std::f32::consts::TAU * bass_hz / PREVIEW_RATE as f32;
+            }
+            if lead_hz > 0.0 && event.fm1_level > 0 {
+                sample += lead_phase.sin() * lead_gain;
+                lead_phase += std::f32::consts::TAU * lead_hz / PREVIEW_RATE as f32;
+            }
+            if event.psg_noise_level > 0 {
+                noise_state = noise_state
+                    .wrapping_mul(1_664_525)
+                    .wrapping_add(1_013_904_223);
+                let noise = ((noise_state >> 16) as f32 / 32768.0) - 1.0;
+                sample += noise * noise_gain;
+            }
+
+            if let Some((bytes, pos, rate)) = dac_active.as_mut() {
+                if !bytes.is_empty() {
+                    let centered = bytes[*pos] as f32 - 128.0;
+                    sample += centered / 128.0 * dac_gain;
+                    dac_rate_accum += *rate;
+                    while dac_rate_accum >= PREVIEW_RATE {
+                        dac_rate_accum -= PREVIEW_RATE;
+                        *pos += 1;
+                        if *pos >= bytes.len() {
+                            dac_active = None;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            let value = (sample.clamp(-1.0, 1.0) * 24_000.0).round() as i16;
+            stereo.push(value);
+            stereo.push(value);
+        }
+    }
+
+    if stereo.is_empty() {
+        stereo.extend(std::iter::repeat_n(0, (PREVIEW_RATE / 4) as usize * 2));
+    }
+
+    write_wav_i16_stereo(&path, PREVIEW_RATE, &stereo)?;
+    Ok(path)
+}
+
 fn write_analysis_json(
     path: &Path,
     input: &Path,
@@ -3016,6 +3107,7 @@ fn analyse_input(
     let render_plan = bundle_dir.join("render_plan.vand-audio.json");
     let preview_report = bundle_dir.join("preview_report.json");
     let dac_preview = write_dac_preview_wav(&bundle_dir, &dac_chunks)?;
+    let runtime_preview = write_runtime_preview_wav(&bundle_dir, &runtime_events, &dac_chunks)?;
     write_import_metadata(&import_metadata, input, &imported)?;
     write_analysis_json(&out, input, &imported.wav, &frames)?;
     write_note_arrangement_json(
@@ -3069,6 +3161,7 @@ fn analyse_input(
         bundle_dir,
         import_metadata,
         dac_preview,
+        runtime_preview,
     })
 }
 
@@ -3197,10 +3290,11 @@ fn launch_gui() -> io::Result<()> {
                 match analyse_input(path, Some(out), false) {
                     Ok(summary) => {
                         println!(
-                            "wrote {}, {}, and {}",
+                            "wrote {}, {}, {}, and {}",
                             summary.arrangement.display(),
                             summary.import_metadata.display(),
-                            summary.dac_preview.display()
+                            summary.dac_preview.display(),
+                            summary.runtime_preview.display()
                         );
                         last_summary = Some(summary);
                     }

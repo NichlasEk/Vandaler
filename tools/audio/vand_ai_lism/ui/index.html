@@ -130,6 +130,17 @@
           </article>
           <article>
             <div class="panelTitle">
+              <span>Runtime</span>
+              <button id="loadRuntimeBtn" disabled>Load</button>
+            </div>
+            <div id="runtimeProgress" class="progressBlock compact" hidden>
+              <div class="progressLabel">Loading runtime preview</div>
+              <div class="progressTrack"><div></div></div>
+            </div>
+            <audio id="runtimePlayer" controls></audio>
+          </article>
+          <article>
+            <div class="panelTitle">
               <span>Instrument</span>
               <button id="previewInstrumentBtn" disabled>Preview</button>
             </div>

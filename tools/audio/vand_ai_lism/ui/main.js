@@ -166,6 +166,7 @@ function setSummary(summary) {
   $("loadDacBtn").disabled = !summary?.dac_preview;
   $("loadArrangementBtn").disabled = !summary?.arrangement;
   $("loadNoteBtn").disabled = !(summary?.render_plan || summary?.note_arrangement);
+  $("loadRuntimeBtn").disabled = !summary?.runtime_preview;
 
   if (!summary) {
     $("exportList").textContent = "No analysis yet.";
@@ -181,6 +182,7 @@ function setSummary(summary) {
     ["Preview Report", summary.preview_report],
     ["Import", summary.import_metadata],
     ["DAC Preview", summary.dac_preview],
+    ["Runtime Preview", summary.runtime_preview],
   ]) {
     const row = document.createElement("div");
     row.textContent = `${label}: ${value}`;
@@ -364,6 +366,17 @@ function loadDac() {
   loadPlayer("dacPlayer", state.summary.dac_preview, "DAC preview", "dacProgress", "loadDacBtn");
 }
 
+function loadRuntime() {
+  if (!state.summary?.runtime_preview) return;
+  loadPlayer(
+    "runtimePlayer",
+    state.summary.runtime_preview,
+    "runtime preview",
+    "runtimeProgress",
+    "loadRuntimeBtn",
+  );
+}
+
 async function loadArrangement() {
   if (!state.summary?.arrangement) return;
   const player = $("arrangementPlayer");
@@ -415,6 +428,7 @@ $("importBankBtn").addEventListener("click", importBank);
 $("analyseBtn").addEventListener("click", analyse);
 $("loadOriginalBtn").addEventListener("click", loadOriginal);
 $("loadDacBtn").addEventListener("click", loadDac);
+$("loadRuntimeBtn").addEventListener("click", loadRuntime);
 $("loadArrangementBtn").addEventListener("click", loadArrangement);
 $("loadNoteBtn").addEventListener("click", loadNote);
 $("previewInstrumentBtn").addEventListener("click", previewInstrument);
