@@ -898,11 +898,13 @@ fn render_note_arrangement_samples(
     let mut pad_end = 0usize;
     let mut chord_end = 0usize;
     let mut counter_end = 0usize;
+    let mut psg_end = [0usize; 3];
     let mut bass_on = false;
     let mut lead_on = false;
     let mut pad_on = false;
     let mut chord_on = false;
     let mut counter_on = false;
+    let mut psg_on = [false; 3];
     let mut noise_until = 0usize;
     let mut noise_amp = 0.0f32;
 
@@ -911,6 +913,25 @@ fn render_note_arrangement_samples(
 
         while note_index < notes.len() && notes[note_index].start_frame == frame {
             let note = &notes[note_index];
+            if let Some(channel) = match note.track.as_str() {
+                "psg_lead" => Some(0usize),
+                "psg_counter" => Some(1usize),
+                "psg_bass" => Some(2usize),
+                _ => None,
+            } {
+                let effective_velocity = (note.velocity * mix.psg_gain).clamp(0.0, 1.0);
+                psg_set_tone(
+                    &mut audio,
+                    channel as u8,
+                    note.hz as f64,
+                    amp_to_psg_volume(effective_velocity),
+                );
+                psg_on[channel] = true;
+                psg_end[channel] = note.start_frame.saturating_add(note.frames);
+                note_index += 1;
+                continue;
+            }
+
             let (channel, current_id, active, end_frame, fallback) = if note.track == "bass" {
                 (
                     0usize,
@@ -1010,6 +1031,12 @@ fn render_note_arrangement_samples(
         if counter_on && frame >= counter_end {
             fm_key_on(&mut audio, 4, false);
             counter_on = false;
+        }
+        for channel in 0..3 {
+            if psg_on[channel] && frame >= psg_end[channel] {
+                psg_latch_volume(&mut audio, channel as u8, 15);
+                psg_on[channel] = false;
+            }
         }
 
         while drum_index < drums.len() && drums[drum_index].start_frame == frame {

@@ -32,6 +32,12 @@ typedef struct
     u16 fm4_fnum;
     u8 fm4_block;
     u8 fm4_level;
+    u16 psg0_tone;
+    u8 psg0_level;
+    u16 psg1_tone;
+    u8 psg1_level;
+    u16 psg2_tone;
+    u8 psg2_level;
     u8 psg_noise_level;
     u8 kind;
     u8 dac_chunk;

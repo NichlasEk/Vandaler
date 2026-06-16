@@ -10,7 +10,6 @@
 #define VAND_AUDIO_DAC_NONE 255
 #define VAND_AUDIO_DAC_DEFAULT_RATE 8000
 #define VAND_AUDIO_TICKS_PER_SECOND 60
-#define VAND_AUDIO_PSG_CLOCK 3579545UL
 
 static bool audioReady = FALSE;
 static const u8 * const *dacSamples = NULL;
@@ -23,8 +22,6 @@ static u16 dacPos = 0;
 static u16 dacRate = 0;
 static u16 dacRateRemainder = 0;
 static u8 dacLevel = 0;
-static u16 psgHoldTone[2] = {0, 0};
-static u8 psgHoldFrames[2] = {0, 0};
 static u16 fmCurrentFnum[VAND_AUDIO_FM_CHANNELS] = {0, 0, 0, 0, 0};
 static u8 fmCurrentBlock[VAND_AUDIO_FM_CHANNELS] = {0, 0, 0, 0, 0};
 static u8 fmCurrentLevel[VAND_AUDIO_FM_CHANNELS] = {0, 0, 0, 0, 0};
@@ -141,51 +138,19 @@ static void psgSetNoiseLevel(u8 level, u8 kind)
     PSG_setEnvelope(3, envelope);
 }
 
-static u16 psgToneFromYm(u16 fnum, u8 block)
+static void psgSetToneLevel(u8 channel, u16 tone, u8 level)
 {
-    u32 hz;
-    u32 tone;
+    const u8 clamped = level > 15 ? 15 : level;
 
-    if ((fnum == 0) || (block == 0)) return 0;
-
-    hz = (((u32)fnum * 7670454UL) >> 20) / 144UL;
-    hz <<= (block - 1);
-    if (hz < 32) return 0;
-
-    tone = VAND_AUDIO_PSG_CLOCK / (32UL * hz);
-    if (tone < 1) tone = 1;
-    if (tone > 0x03FF) tone = 0x03FF;
-    return (u16)tone;
-}
-
-static void psgSetToneLevel(u8 channel, u16 fnum, u8 block, u8 level)
-{
-    u8 boosted;
-    const u16 tone = psgToneFromYm(fnum, block);
-    const u8 index = channel - 1;
-
-    if ((channel < 1) || (channel > 2)) return;
-
-    if ((tone > 0) && (level > 0))
+    if (channel > 2) return;
+    if ((tone > 0) && (clamped > 0))
     {
-        psgHoldTone[index] = tone;
-        psgHoldFrames[index] = 10;
-        boosted = level + 7;
-        if (boosted > 15) boosted = 15;
         PSG_setTone(channel, tone);
-        PSG_setEnvelope(channel, 15 - boosted);
+        PSG_setEnvelope(channel, 15 - clamped);
         return;
     }
 
-    if ((psgHoldTone[index] > 0) && (psgHoldFrames[index] > 0))
-    {
-        psgHoldFrames[index]--;
-        PSG_setTone(channel, psgHoldTone[index]);
-        PSG_setEnvelope(channel, 4);
-        return;
-    }
-
-    PSG_setEnvelope(channel, 10);
+    PSG_setEnvelope(channel, PSG_ENVELOPE_MIN);
 }
 
 static void dacStop(void)
@@ -244,9 +209,10 @@ static void applyEvent(const VandAudioEvent *event)
     ymApplyChannel(VAND_AUDIO_FM_CHORD_CH, event->fm3_fnum, event->fm3_block, event->fm3_level);
     ymApplyChannel(VAND_AUDIO_FM_COUNTER_CH, event->fm4_fnum, event->fm4_block, event->fm4_level);
 
+    psgSetToneLevel(0, event->psg0_tone, event->psg0_level);
+    psgSetToneLevel(1, event->psg1_tone, event->psg1_level);
+    psgSetToneLevel(2, event->psg2_tone, event->psg2_level);
     psgSetNoiseLevel(event->psg_noise_level, event->kind);
-    psgSetToneLevel(1, event->fm0_fnum, event->fm0_block, event->fm0_level);
-    psgSetToneLevel(2, event->fm1_fnum, event->fm1_block, event->fm1_level);
     dacStart(event->dac_chunk, event->dac_level);
 }
 
@@ -267,10 +233,9 @@ void VandAudio_init(void)
         fmCurrentBlock[i] = 0;
         fmCurrentLevel[i] = 0;
     }
-    psgHoldTone[0] = 0;
-    psgHoldTone[1] = 0;
-    psgHoldFrames[0] = 0;
-    psgHoldFrames[1] = 0;
+    PSG_setEnvelope(0, PSG_ENVELOPE_MIN);
+    PSG_setEnvelope(1, PSG_ENVELOPE_MIN);
+    PSG_setEnvelope(2, PSG_ENVELOPE_MIN);
     PSG_setEnvelope(3, PSG_ENVELOPE_MIN);
     audioReady = TRUE;
 }
@@ -319,10 +284,7 @@ void VandAudio_stop(VandAudioPlayer *player)
     fmCurrentLevel[0] = 0;
     fmCurrentLevel[1] = 0;
     fmCurrentLevel[2] = 0;
-    psgHoldTone[0] = 0;
-    psgHoldTone[1] = 0;
-    psgHoldFrames[0] = 0;
-    psgHoldFrames[1] = 0;
+    PSG_setEnvelope(0, PSG_ENVELOPE_MIN);
     PSG_setEnvelope(1, PSG_ENVELOPE_MIN);
     PSG_setEnvelope(2, PSG_ENVELOPE_MIN);
     PSG_setEnvelope(3, PSG_ENVELOPE_MIN);
