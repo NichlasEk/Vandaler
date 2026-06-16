@@ -430,6 +430,7 @@ struct AnalysisSummary {
     dac_chunks: usize,
     arrangement: PathBuf,
     note_arrangement: PathBuf,
+    render_plan: PathBuf,
     preview_report: PathBuf,
     bundle_dir: PathBuf,
     import_metadata: PathBuf,
@@ -2817,6 +2818,100 @@ fn write_note_arrangement_json(
     std::fs::write(path, out)
 }
 
+fn write_render_plan_json(
+    path: &Path,
+    input: &Path,
+    wav: &WavData,
+    frames: &[AnalysisFrame],
+    chunks: &[DacChunk],
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let (context, bass_notes, lead_notes, drum_events) =
+        build_note_preview_data(frames, wav.sample_rate, chunks);
+    let duration = wav.samples.len() as f32 / wav.sample_rate as f32;
+    let mut out = String::new();
+    out.push_str("{\n");
+    out.push_str("  \"format\": \"vandaler-render-plan-v0\",\n");
+    out.push_str(&format!(
+        "  \"source\": \"{}\",\n",
+        json_escape(&input.display().to_string())
+    ));
+    out.push_str(&format!("  \"sample_rate\": {},\n", wav.sample_rate));
+    out.push_str(&format!("  \"duration\": {:.6},\n", duration));
+    out.push_str(&format!("  \"hop\": {},\n", ANALYSIS_HOP));
+    out.push_str(&format!("  \"total_frames\": {},\n", frames.len()));
+    out.push_str(&format!(
+        "  \"instrument_bank\": \"{}\",\n",
+        DEFAULT_INSTRUMENT_BANK
+    ));
+    out.push_str(&format!(
+        "  \"tempo\": {{\"bpm\": {:.3}, \"frames_per_beat\": {:.3}, \"grid_frames\": {}}},\n",
+        context.bpm, context.frames_per_beat, context.grid_frames
+    ));
+    out.push_str("  \"mix\": {\"bass_gain\": 1.0, \"lead_gain\": 0.85, \"psg_gain\": 0.85, \"dac_gain\": 1.0},\n");
+    out.push_str("  \"tracks\": [\n");
+
+    for (track_index, (role, chip, channel, notes)) in [
+        ("bass", "ym2612", 0usize, bass_notes.as_slice()),
+        ("lead", "ym2612", 1usize, lead_notes.as_slice()),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let track_comma = if track_index == 1 { "" } else { "," };
+        out.push_str(&format!(
+            "    {{\"role\": \"{}\", \"chip\": \"{}\", \"channel\": {}, \"events\": [\n",
+            role, chip, channel
+        ));
+        for (i, note) in notes.iter().enumerate() {
+            let comma = if i + 1 == notes.len() { "" } else { "," };
+            out.push_str(&format!(
+                concat!(
+                    "      {{\"start_frame\": {}, \"frames\": {}, \"midi\": {}, ",
+                    "\"hz\": {:.3}, \"velocity\": {:.5}, \"instrument_id\": \"{}\"}}{}\n"
+                ),
+                note.start_frame,
+                note.frames,
+                note.midi,
+                note.hz,
+                note.velocity,
+                note.instrument_id,
+                comma
+            ));
+        }
+        out.push_str(&format!("    ]}}{}\n", track_comma));
+    }
+    out.push_str("  ],\n");
+
+    out.push_str("  \"drums\": [\n");
+    for (i, drum) in drum_events.iter().enumerate() {
+        let comma = if i + 1 == drum_events.len() { "" } else { "," };
+        out.push_str(&format!(
+            concat!(
+                "    {{\"start_frame\": {}, \"kind\": \"{}\", \"velocity\": {:.5}, ",
+                "\"psg_noise_amp\": {:.5}, \"psg_instrument_id\": \"{}\", ",
+                "\"dac_chunk\": {}, \"dac_path\": \"{}\"}}{}\n"
+            ),
+            drum.start_frame,
+            drum.kind,
+            drum.velocity,
+            drum.noise_amp,
+            drum.instrument_id,
+            drum.dac_chunk
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "null".to_string()),
+            json_escape(&drum.dac_path),
+            comma
+        ));
+    }
+    out.push_str("  ]\n");
+    out.push_str("}\n");
+    std::fs::write(path, out)
+}
+
 fn analyse_input(
     input: &Path,
     out: Option<PathBuf>,
@@ -2830,6 +2925,7 @@ fn analyse_input(
     let runtime_events = build_runtime_events(&frames, imported.wav.sample_rate, &dac_chunks);
     let import_metadata = bundle_dir.join("import.json");
     let note_arrangement = bundle_dir.join("note_arrangement.vand-audio.json");
+    let render_plan = bundle_dir.join("render_plan.vand-audio.json");
     let preview_report = bundle_dir.join("preview_report.json");
     let dac_preview = write_dac_preview_wav(&bundle_dir, &dac_chunks)?;
     write_import_metadata(&import_metadata, input, &imported)?;
@@ -2841,6 +2937,7 @@ fn analyse_input(
         &frames,
         &dac_chunks,
     )?;
+    write_render_plan_json(&render_plan, input, &imported.wav, &frames, &dac_chunks)?;
     write_preview_report_json(&preview_report, input, &imported.wav, &frames, &dac_chunks)?;
     write_split_tracks(&bundle_dir, input, &frames)?;
     write_dac_chunks_json(
@@ -2879,6 +2976,7 @@ fn analyse_input(
         dac_chunks: dac_chunks.len(),
         arrangement: out,
         note_arrangement,
+        render_plan,
         preview_report,
         bundle_dir,
         import_metadata,
@@ -2893,7 +2991,7 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing audio path"))?;
     let summary = analyse_input(input, args.out.clone(), args.install_sgdk)?;
     println!(
-        "analysed {} | {} frames, {} active, {} runtime events, {} dac chunks | wrote {} | note {} | report {}",
+        "analysed {} | {} frames, {} active, {} runtime events, {} dac chunks | wrote {} | note {} | render {} | report {}",
         input.display(),
         summary.frames,
         summary.active_frames,
@@ -2901,6 +2999,7 @@ fn analyse_wav(args: &Args) -> io::Result<()> {
         summary.dac_chunks,
         summary.arrangement.display(),
         summary.note_arrangement.display(),
+        summary.render_plan.display(),
         summary.preview_report.display()
     );
     Ok(())

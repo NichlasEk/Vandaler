@@ -66,6 +66,7 @@ struct AnalysisSummary {
     dac_chunks: u32,
     arrangement: String,
     note_arrangement: String,
+    render_plan: String,
     preview_report: String,
     key: String,
     bpm: f32,
@@ -1060,6 +1061,10 @@ async fn analyse_audio(input: String, output_dir: String) -> Result<AnalysisResu
             arrangement: output_path.display().to_string(),
             note_arrangement: bundle_dir
                 .join("note_arrangement.vand-audio.json")
+                .display()
+                .to_string(),
+            render_plan: bundle_dir
+                .join("render_plan.vand-audio.json")
                 .display()
                 .to_string(),
             preview_report: preview_report_path.display().to_string(),

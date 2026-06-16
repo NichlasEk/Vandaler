@@ -175,6 +175,7 @@ function setSummary(summary) {
     ["Bundle", summary.bundle_dir],
     ["Arrangement", summary.arrangement],
     ["Note Arrangement", summary.note_arrangement],
+    ["Render Plan", summary.render_plan],
     ["Preview Report", summary.preview_report],
     ["Import", summary.import_metadata],
     ["DAC Preview", summary.dac_preview],
