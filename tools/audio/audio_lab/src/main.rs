@@ -2681,6 +2681,49 @@ fn filter_lead_notes_against_bass(
         .collect()
 }
 
+fn smooth_lead_melody(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<NoteEvent> {
+    let mut notes = merge_neighbor_notes(notes);
+    notes.sort_by_key(|note| note.start_frame);
+
+    let min_spacing = context.grid_frames.max(2) * 2;
+    let mut out: Vec<NoteEvent> = Vec::new();
+    for mut note in notes {
+        if note.velocity < 0.14 || note.frames < min_spacing {
+            continue;
+        }
+
+        if let Some(last) = out.last_mut() {
+            let last_end = last.start_frame.saturating_add(last.frames);
+            let gap = note.start_frame.saturating_sub(last_end);
+            if note.start_frame < last_end || gap < min_spacing / 2 {
+                let last_score = last.velocity * last.frames as f32;
+                let note_score = note.velocity * note.frames as f32;
+                if note_score > last_score * 1.18 {
+                    *last = note;
+                }
+                continue;
+            }
+
+            let mut adjusted = note.midi;
+            while adjusted - last.midi > 9 {
+                adjusted -= 12;
+            }
+            while last.midi - adjusted > 9 {
+                adjusted += 12;
+            }
+            adjusted = fold_midi_to_range(adjusted, 48, 84);
+            adjusted = snap_midi_to_scale(adjusted, context.key_root, context.mode, 48, 84);
+            note.midi = adjusted;
+            note.hz = midi_to_hz(note.midi);
+        }
+
+        note.velocity = note.velocity.clamp(0.12, 0.78);
+        out.push(note);
+    }
+
+    merge_neighbor_notes(out)
+}
+
 fn lock_bass_pattern(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<NoteEvent> {
     let bar_frames = (context.frames_per_beat * 4.0).round().max(16.0) as usize;
     let slot_count = 16usize;
@@ -2722,6 +2765,39 @@ fn lock_bass_pattern(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<Not
             note
         })
         .collect()
+}
+
+fn quantize_drum_events(mut drums: Vec<DrumEvent>, context: &MusicalContext) -> Vec<DrumEvent> {
+    let max_shift = (context.grid_frames / 2).max(1);
+    for drum in &mut drums {
+        drum.start_frame = snap_frame_to_grid(drum.start_frame, context.grid_frames, max_shift);
+        drum.velocity = drum.velocity.clamp(0.12, 0.95);
+        drum.noise_amp = drum.noise_amp.clamp(0.08, 0.90);
+    }
+
+    drums.sort_by_key(|drum| drum.start_frame);
+    let mut out: Vec<DrumEvent> = Vec::new();
+    for drum in drums {
+        if let Some(last) = out.last_mut() {
+            if last.start_frame == drum.start_frame {
+                let last_score = last.velocity + if last.dac_chunk.is_some() { 0.35 } else { 0.0 };
+                let drum_score = drum.velocity + if drum.dac_chunk.is_some() { 0.35 } else { 0.0 };
+                if drum_score > last_score {
+                    *last = drum;
+                }
+                continue;
+            }
+
+            if drum.start_frame.saturating_sub(last.start_frame) < context.grid_frames / 2
+                && drum.velocity < 0.65
+            {
+                continue;
+            }
+        }
+        out.push(drum);
+    }
+
+    out
 }
 
 fn nearest_dac_chunk(frame_index: usize, chunks: &[DacChunk]) -> Option<&DacChunk> {
@@ -2784,7 +2860,8 @@ fn build_note_preview_data(
         build_note_events_for_track(frames, "lead", 48, 84, DEFAULT_LEAD_INSTRUMENT, &context),
         &bass_notes,
     );
-    let drum_events = build_drum_events(frames, chunks);
+    let lead_notes = smooth_lead_melody(lead_notes, &context);
+    let drum_events = quantize_drum_events(build_drum_events(frames, chunks), &context);
     (context, bass_notes, lead_notes, drum_events)
 }
 
@@ -2933,7 +3010,7 @@ fn write_note_arrangement_json(
         drum_events.len(),
         dac_drums
     ));
-    out.push_str("  \"pipeline\": [\"frame_analysis\", \"key_detection\", \"scale_snap\", \"beat_grid\", \"pitch_hysteresis\", \"bass_pattern_lock\", \"lead_confidence_filter\", \"drum_gate\"],\n");
+    out.push_str("  \"pipeline\": [\"frame_analysis\", \"key_detection\", \"scale_snap\", \"beat_grid\", \"pitch_hysteresis\", \"bass_pattern_lock\", \"lead_confidence_filter\", \"lead_melodic_smoothing\", \"drum_gate\", \"drum_grid_lock\"],\n");
 
     out.push_str("  \"notes\": [\n");
     let total_notes = bass_notes.len() + lead_notes.len();
