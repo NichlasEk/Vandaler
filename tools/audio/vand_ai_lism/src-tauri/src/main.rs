@@ -199,6 +199,10 @@ struct VandDrumEvent {
     velocity: f32,
     noise_amp: f32,
     instrument_id: String,
+    #[serde(default)]
+    dac_chunk: Option<usize>,
+    #[serde(default)]
+    dac_path: String,
 }
 
 fn default_sample_rate() -> u32 {
@@ -708,6 +712,7 @@ fn render_arrangement_samples(
 fn render_note_arrangement_samples(
     arrangement: &VandNoteArrangement,
     instruments: &HashMap<String, VandInstrument>,
+    arrangement_dir: &Path,
 ) -> Vec<i16> {
     const RATE: u32 = 44_100;
     let frame_samples = frame_sample_count(arrangement.sample_rate, arrangement.hop);
@@ -825,7 +830,58 @@ fn render_note_arrangement_samples(
         ));
     }
 
+    mix_dac_drums(&mut out, &drums, arrangement_dir, frame_samples);
     out
+}
+
+fn mix_dac_drums(
+    out: &mut [i16],
+    drums: &[VandDrumEvent],
+    arrangement_dir: &Path,
+    frame_samples: usize,
+) {
+    const PREVIEW_RATE: usize = 44_100;
+    const DAC_RATE: usize = 13_320;
+    let mut cache: HashMap<String, Vec<u8>> = HashMap::new();
+
+    for drum in drums {
+        if drum.dac_chunk.is_none() || drum.dac_path.is_empty() {
+            continue;
+        }
+        let bytes = if let Some(bytes) = cache.get(&drum.dac_path) {
+            bytes
+        } else {
+            let path = resolve_existing_path(Path::new(""), arrangement_dir, &drum.dac_path);
+            let Ok(bytes) = fs::read(path) else {
+                continue;
+            };
+            cache.insert(drum.dac_path.clone(), bytes);
+            cache.get(&drum.dac_path).unwrap()
+        };
+        if bytes.is_empty() {
+            continue;
+        }
+
+        let start = drum.start_frame.saturating_mul(frame_samples);
+        if start >= out.len() {
+            continue;
+        }
+        let gain = drum.velocity.max(drum.noise_amp).clamp(0.0, 1.0) * 0.55;
+        let preview_len = ((bytes.len() as u64 * PREVIEW_RATE as u64 + (DAC_RATE / 2) as u64)
+            / DAC_RATE as u64)
+            .max(1) as usize;
+        for i in 0..preview_len {
+            let out_index = start + i;
+            if out_index >= out.len() {
+                break;
+            }
+            let src_index = (i * DAC_RATE / PREVIEW_RATE).min(bytes.len() - 1);
+            let centered = bytes[src_index] as f32 - 128.0;
+            let sample = (centered / 128.0 * 32767.0 * gain).round() as i32;
+            let mixed = i32::from(out[out_index]) + sample;
+            out[out_index] = mixed.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        }
+    }
 }
 
 fn parse_metric(log: &str, label: &str) -> u32 {
@@ -1103,7 +1159,9 @@ async fn note_preview_data_url(path: String, bank_path: String) -> Result<String
             &arrangement,
             &bank_path,
         )?;
-        let mut samples = render_note_arrangement_samples(&arrangement, &instruments);
+        let arrangement_dir = arrangement_path.parent().unwrap_or_else(|| Path::new("."));
+        let mut samples =
+            render_note_arrangement_samples(&arrangement, &instruments, arrangement_dir);
         normalize_preview_samples(&mut samples, 22_000);
         let preview = std::env::temp_dir().join("vand-ai-lism-note-preview.wav");
         write_preview_wav(&preview, 44_100, &samples)?;
@@ -1221,12 +1279,18 @@ mod tests {
                 velocity: 0.8,
                 noise_amp: 0.5,
                 instrument_id: DEFAULT_NOISE_INSTRUMENT.to_string(),
+                dac_chunk: None,
+                dac_path: String::new(),
             }],
         };
         let instruments =
             load_instrument_bank_for_note_arrangement(&repo, &arrangement_path, &arrangement, "")
                 .expect("core bank");
-        let mut samples = render_note_arrangement_samples(&arrangement, &instruments);
+        let mut samples = render_note_arrangement_samples(
+            &arrangement,
+            &instruments,
+            arrangement_path.parent().unwrap(),
+        );
         assert!(!samples.is_empty());
         assert!(samples.iter().any(|sample| *sample != 0));
         normalize_preview_samples(&mut samples, 22_000);
@@ -1259,5 +1323,27 @@ mod tests {
             decoded.presets.get("preview").map(String::as_str),
             Some("note")
         );
+    }
+
+    #[test]
+    fn mixes_dac_drum_chunks_into_preview_buffer() {
+        let dir = std::env::temp_dir().join("vand-ai-lism-dac-mix-test");
+        fs::create_dir_all(dir.join("dac_chunks")).expect("temp chunk dir");
+        fs::write(
+            dir.join("dac_chunks/chunk_00.u8"),
+            [128u8, 255, 0, 220, 128],
+        )
+        .expect("chunk bytes");
+        let drums = vec![VandDrumEvent {
+            start_frame: 1,
+            velocity: 1.0,
+            noise_amp: 0.0,
+            instrument_id: DEFAULT_NOISE_INSTRUMENT.to_string(),
+            dac_chunk: Some(0),
+            dac_path: "dac_chunks/chunk_00.u8".to_string(),
+        }];
+        let mut out = vec![0i16; 256];
+        mix_dac_drums(&mut out, &drums, &dir, 32);
+        assert!(out.iter().any(|sample| *sample != 0));
     }
 }

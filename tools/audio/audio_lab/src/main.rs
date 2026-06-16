@@ -464,6 +464,8 @@ struct DrumEvent {
     velocity: f32,
     noise_amp: f32,
     instrument_id: &'static str,
+    dac_chunk: Option<usize>,
+    dac_path: String,
 }
 
 fn read_u16_le(bytes: &[u8]) -> u16 {
@@ -2561,7 +2563,14 @@ fn lock_bass_pattern(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<Not
         .collect()
 }
 
-fn build_drum_events(frames: &[AnalysisFrame]) -> Vec<DrumEvent> {
+fn nearest_dac_chunk(frame_index: usize, chunks: &[DacChunk]) -> Option<&DacChunk> {
+    chunks
+        .iter()
+        .filter(|chunk| frame_index.abs_diff(chunk.start_frame) <= 18)
+        .min_by_key(|chunk| frame_index.abs_diff(chunk.start_frame))
+}
+
+fn build_drum_events(frames: &[AnalysisFrame], chunks: &[DacChunk]) -> Vec<DrumEvent> {
     let mut drums = Vec::new();
     let mut last_frame = 0usize;
 
@@ -2572,6 +2581,7 @@ fn build_drum_events(frames: &[AnalysisFrame]) -> Vec<DrumEvent> {
         let transient_hit = frame.transient > 0.72 && frame.rms > 0.04;
         let clear_drum = noise_hit || transient_hit;
         if clear_drum && frame.index.saturating_sub(last_frame) > 6 {
+            let dac = nearest_dac_chunk(frame.index, chunks);
             drums.push(DrumEvent {
                 start_frame: frame.index,
                 kind: if frame.rms > 0.18 {
@@ -2584,6 +2594,8 @@ fn build_drum_events(frames: &[AnalysisFrame]) -> Vec<DrumEvent> {
                 velocity: frame.transient.clamp(0.1, 1.0),
                 noise_amp: frame.noise_amp.max(frame.transient * 0.35).clamp(0.0, 1.0),
                 instrument_id: DEFAULT_NOISE_INSTRUMENT,
+                dac_chunk: dac.map(|chunk| chunk.id),
+                dac_path: dac.map(|chunk| chunk.path.clone()).unwrap_or_default(),
             });
             last_frame = frame.index;
         }
@@ -2595,6 +2607,7 @@ fn build_drum_events(frames: &[AnalysisFrame]) -> Vec<DrumEvent> {
 fn build_note_preview_data(
     frames: &[AnalysisFrame],
     sample_rate: u32,
+    chunks: &[DacChunk],
 ) -> (
     MusicalContext,
     Vec<NoteEvent>,
@@ -2610,7 +2623,7 @@ fn build_note_preview_data(
         build_note_events_for_track(frames, "lead", 48, 84, DEFAULT_LEAD_INSTRUMENT, &context),
         &bass_notes,
     );
-    let drum_events = build_drum_events(frames);
+    let drum_events = build_drum_events(frames, chunks);
     (context, bass_notes, lead_notes, drum_events)
 }
 
@@ -2619,12 +2632,17 @@ fn write_preview_report_json(
     input: &Path,
     wav: &WavData,
     frames: &[AnalysisFrame],
+    chunks: &[DacChunk],
 ) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let (context, bass_notes, lead_notes, drum_events) =
-        build_note_preview_data(frames, wav.sample_rate);
+        build_note_preview_data(frames, wav.sample_rate, chunks);
+    let dac_drums = drum_events
+        .iter()
+        .filter(|drum| drum.dac_chunk.is_some())
+        .count();
     let active_frames = frames
         .iter()
         .filter(|frame| frame.class_name != "silence")
@@ -2664,6 +2682,7 @@ fn write_preview_report_json(
             "  \"bass_notes\": {},\n",
             "  \"lead_notes\": {},\n",
             "  \"drum_events\": {},\n",
+            "  \"dac_drum_events\": {},\n",
             "  \"avg_bass_note_frames\": {:.3},\n",
             "  \"avg_lead_note_frames\": {:.3}\n",
             "}}\n"
@@ -2682,6 +2701,7 @@ fn write_preview_report_json(
         bass_notes.len(),
         lead_notes.len(),
         drum_events.len(),
+        dac_drums,
         avg_bass_frames,
         avg_lead_frames
     );
@@ -2693,13 +2713,18 @@ fn write_note_arrangement_json(
     input: &Path,
     wav: &WavData,
     frames: &[AnalysisFrame],
+    chunks: &[DacChunk],
 ) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
     let (context, bass_notes, lead_notes, drum_events) =
-        build_note_preview_data(frames, wav.sample_rate);
+        build_note_preview_data(frames, wav.sample_rate, chunks);
+    let dac_drums = drum_events
+        .iter()
+        .filter(|drum| drum.dac_chunk.is_some())
+        .count();
     let duration = wav.samples.len() as f32 / wav.sample_rate as f32;
     let mut out = String::new();
     out.push_str("{\n");
@@ -2720,7 +2745,8 @@ fn write_note_arrangement_json(
         concat!(
             "  \"analysis\": {{\"key\": \"{} {}\", \"key_root\": {}, \"mode\": \"{}\", ",
             "\"key_confidence\": {:.5}, \"bpm\": {:.3}, \"frames_per_beat\": {:.3}, ",
-            "\"grid_frames\": {}, \"bass_notes\": {}, \"lead_notes\": {}, \"drum_events\": {}}},\n"
+            "\"grid_frames\": {}, \"bass_notes\": {}, \"lead_notes\": {}, \"drum_events\": {}, ",
+            "\"dac_drum_events\": {}}},\n"
         ),
         pitch_class_name(context.key_root),
         context.mode,
@@ -2732,7 +2758,8 @@ fn write_note_arrangement_json(
         context.grid_frames,
         bass_notes.len(),
         lead_notes.len(),
-        drum_events.len()
+        drum_events.len(),
+        dac_drums
     ));
     out.push_str("  \"pipeline\": [\"frame_analysis\", \"key_detection\", \"scale_snap\", \"beat_grid\", \"pitch_hysteresis\", \"bass_pattern_lock\", \"lead_confidence_filter\", \"drum_gate\"],\n");
 
@@ -2769,7 +2796,8 @@ fn write_note_arrangement_json(
         out.push_str(&format!(
             concat!(
                 "    {{\"start_frame\": {}, \"t\": {:.6}, \"kind\": \"{}\", ",
-                "\"velocity\": {:.5}, \"noise_amp\": {:.5}, \"instrument_id\": \"{}\"}}{}\n"
+                "\"velocity\": {:.5}, \"noise_amp\": {:.5}, \"instrument_id\": \"{}\", ",
+                "\"dac_chunk\": {}, \"dac_path\": \"{}\"}}{}\n"
             ),
             drum.start_frame,
             drum.start_frame as f32 * ANALYSIS_HOP as f32 / wav.sample_rate as f32,
@@ -2777,6 +2805,10 @@ fn write_note_arrangement_json(
             drum.velocity,
             drum.noise_amp,
             drum.instrument_id,
+            drum.dac_chunk
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "null".to_string()),
+            json_escape(&drum.dac_path),
             comma,
         ));
     }
@@ -2802,8 +2834,14 @@ fn analyse_input(
     let dac_preview = write_dac_preview_wav(&bundle_dir, &dac_chunks)?;
     write_import_metadata(&import_metadata, input, &imported)?;
     write_analysis_json(&out, input, &imported.wav, &frames)?;
-    write_note_arrangement_json(&note_arrangement, input, &imported.wav, &frames)?;
-    write_preview_report_json(&preview_report, input, &imported.wav, &frames)?;
+    write_note_arrangement_json(
+        &note_arrangement,
+        input,
+        &imported.wav,
+        &frames,
+        &dac_chunks,
+    )?;
+    write_preview_report_json(&preview_report, input, &imported.wav, &frames, &dac_chunks)?;
     write_split_tracks(&bundle_dir, input, &frames)?;
     write_dac_chunks_json(
         &bundle_dir.join("dac_chunks.json"),
