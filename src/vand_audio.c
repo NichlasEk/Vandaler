@@ -21,6 +21,9 @@ static u16 dacRateRemainder = 0;
 static u8 dacLevel = 0;
 static u16 psgHoldTone[2] = {0, 0};
 static u8 psgHoldFrames[2] = {0, 0};
+static u16 fmCurrentFnum[2] = {0, 0};
+static u8 fmCurrentBlock[2] = {0, 0};
+static u8 fmCurrentLevel[2] = {0, 0};
 
 static void ymKey(u8 channel, bool on)
 {
@@ -68,6 +71,39 @@ static void ymInitVoice(u8 channel, bool bass)
     }
 
     ymSetLevel(channel, 0);
+}
+
+static void ymApplyChannel(u8 channel, u16 fnum, u8 block, u8 level)
+{
+    const bool wantOn = (fnum > 0) && (level > 0);
+    const bool wasOn = fmCurrentLevel[channel] > 0;
+    const bool pitchChanged = (fmCurrentFnum[channel] != fnum) || (fmCurrentBlock[channel] != block);
+    const bool levelChanged = fmCurrentLevel[channel] != level;
+
+    if (!wantOn)
+    {
+        if (wasOn) ymKey(channel, FALSE);
+        fmCurrentFnum[channel] = 0;
+        fmCurrentBlock[channel] = 0;
+        fmCurrentLevel[channel] = 0;
+        return;
+    }
+
+    if (!wasOn || pitchChanged)
+    {
+        if (wasOn) ymKey(channel, FALSE);
+        ymSetFrequency(channel, fnum, block);
+        ymSetLevel(channel, level);
+        ymKey(channel, TRUE);
+    }
+    else if (levelChanged)
+    {
+        ymSetLevel(channel, level);
+    }
+
+    fmCurrentFnum[channel] = fnum;
+    fmCurrentBlock[channel] = block;
+    fmCurrentLevel[channel] = level;
 }
 
 static void psgSetNoiseLevel(u8 level, u8 kind)
@@ -177,21 +213,8 @@ static void dacPump(void)
 
 static void applyEvent(const VandAudioEvent *event)
 {
-    ymKey(VAND_AUDIO_FM_BASS_CH, FALSE);
-    if ((event->fm0_fnum > 0) && (event->fm0_level > 0))
-    {
-        ymSetFrequency(VAND_AUDIO_FM_BASS_CH, event->fm0_fnum, event->fm0_block);
-        ymSetLevel(VAND_AUDIO_FM_BASS_CH, event->fm0_level);
-        ymKey(VAND_AUDIO_FM_BASS_CH, TRUE);
-    }
-
-    ymKey(VAND_AUDIO_FM_LEAD_CH, FALSE);
-    if ((event->fm1_fnum > 0) && (event->fm1_level > 0))
-    {
-        ymSetFrequency(VAND_AUDIO_FM_LEAD_CH, event->fm1_fnum, event->fm1_block);
-        ymSetLevel(VAND_AUDIO_FM_LEAD_CH, event->fm1_level);
-        ymKey(VAND_AUDIO_FM_LEAD_CH, TRUE);
-    }
+    ymApplyChannel(VAND_AUDIO_FM_BASS_CH, event->fm0_fnum, event->fm0_block, event->fm0_level);
+    ymApplyChannel(VAND_AUDIO_FM_LEAD_CH, event->fm1_fnum, event->fm1_block, event->fm1_level);
 
     psgSetNoiseLevel(event->psg_noise_level, event->kind);
     psgSetToneLevel(1, event->fm0_fnum, event->fm0_block, event->fm0_level);
@@ -207,6 +230,12 @@ void VandAudio_init(void)
     YM2612_writeReg(0, 0x2A, 0x80);
     ymInitVoice(VAND_AUDIO_FM_BASS_CH, TRUE);
     ymInitVoice(VAND_AUDIO_FM_LEAD_CH, FALSE);
+    fmCurrentFnum[0] = 0;
+    fmCurrentFnum[1] = 0;
+    fmCurrentBlock[0] = 0;
+    fmCurrentBlock[1] = 0;
+    fmCurrentLevel[0] = 0;
+    fmCurrentLevel[1] = 0;
     psgHoldTone[0] = 0;
     psgHoldTone[1] = 0;
     psgHoldFrames[0] = 0;
@@ -249,6 +278,12 @@ void VandAudio_stop(VandAudioPlayer *player)
 
     ymKey(VAND_AUDIO_FM_BASS_CH, FALSE);
     ymKey(VAND_AUDIO_FM_LEAD_CH, FALSE);
+    fmCurrentFnum[0] = 0;
+    fmCurrentFnum[1] = 0;
+    fmCurrentBlock[0] = 0;
+    fmCurrentBlock[1] = 0;
+    fmCurrentLevel[0] = 0;
+    fmCurrentLevel[1] = 0;
     psgHoldTone[0] = 0;
     psgHoldTone[1] = 0;
     psgHoldFrames[0] = 0;
