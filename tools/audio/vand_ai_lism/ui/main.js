@@ -161,6 +161,8 @@ function setSummary(summary) {
   $("musicBpm").textContent = summary?.bpm ? Math.round(summary.bpm).toString() : "-";
   $("musicNotes").textContent = summary ? `${summary.bass_notes || 0}/${summary.lead_notes || 0}` : "-";
   $("musicDrums").textContent = summary ? summary.drum_events || 0 : "-";
+  $("musicLoop").textContent =
+    summary?.loop_end ? `${summary.loop_start.toFixed(1)}-${summary.loop_end.toFixed(1)}s` : "-";
   $("loadDacBtn").disabled = !summary?.dac_preview;
   $("loadArrangementBtn").disabled = !summary?.arrangement;
   $("loadNoteBtn").disabled = !(summary?.render_plan || summary?.note_arrangement);

@@ -456,6 +456,8 @@ struct MusicalContext {
     bpm: f32,
     frames_per_beat: f32,
     grid_frames: usize,
+    loop_start_frame: usize,
+    loop_end_frame: usize,
 }
 
 #[derive(Clone)]
@@ -1490,6 +1492,13 @@ fn analyse_musical_context(frames: &[AnalysisFrame], sample_rate: u32) -> Musica
     let bpm = detect_bpm(frames);
     let frames_per_beat = (sample_rate as f32 * 60.0) / (bpm * ANALYSIS_HOP as f32);
     let grid_frames = (frames_per_beat / 4.0).round().max(2.0) as usize;
+    let bar_frames = (frames_per_beat * 4.0).round().max(16.0) as usize;
+    let min_loop_frames = bar_frames * 4;
+    let mut loop_end_frame = frames.len() / bar_frames * bar_frames;
+    if loop_end_frame < min_loop_frames || frames.len().saturating_sub(loop_end_frame) > bar_frames
+    {
+        loop_end_frame = frames.len();
+    }
     MusicalContext {
         key_root,
         mode,
@@ -1497,6 +1506,8 @@ fn analyse_musical_context(frames: &[AnalysisFrame], sample_rate: u32) -> Musica
         bpm,
         frames_per_beat,
         grid_frames,
+        loop_start_frame: 0,
+        loop_end_frame: loop_end_frame.max(1),
     }
 }
 
@@ -2678,6 +2689,10 @@ fn write_preview_report_json(
             "  \"bpm\": {:.3},\n",
             "  \"frames_per_beat\": {:.3},\n",
             "  \"grid_frames\": {},\n",
+            "  \"loop_start_frame\": {},\n",
+            "  \"loop_end_frame\": {},\n",
+            "  \"loop_start\": {:.6},\n",
+            "  \"loop_end\": {:.6},\n",
             "  \"frames\": {},\n",
             "  \"active_frames\": {},\n",
             "  \"bass_notes\": {},\n",
@@ -2697,6 +2712,10 @@ fn write_preview_report_json(
         context.bpm,
         context.frames_per_beat,
         context.grid_frames,
+        context.loop_start_frame,
+        context.loop_end_frame,
+        context.loop_start_frame as f32 * ANALYSIS_HOP as f32 / wav.sample_rate as f32,
+        context.loop_end_frame as f32 * ANALYSIS_HOP as f32 / wav.sample_rate as f32,
         frames.len(),
         active_frames,
         bass_notes.len(),
@@ -2746,7 +2765,8 @@ fn write_note_arrangement_json(
         concat!(
             "  \"analysis\": {{\"key\": \"{} {}\", \"key_root\": {}, \"mode\": \"{}\", ",
             "\"key_confidence\": {:.5}, \"bpm\": {:.3}, \"frames_per_beat\": {:.3}, ",
-            "\"grid_frames\": {}, \"bass_notes\": {}, \"lead_notes\": {}, \"drum_events\": {}, ",
+            "\"grid_frames\": {}, \"loop_start_frame\": {}, \"loop_end_frame\": {}, ",
+            "\"bass_notes\": {}, \"lead_notes\": {}, \"drum_events\": {}, ",
             "\"dac_drum_events\": {}}},\n"
         ),
         pitch_class_name(context.key_root),
@@ -2757,6 +2777,8 @@ fn write_note_arrangement_json(
         context.bpm,
         context.frames_per_beat,
         context.grid_frames,
+        context.loop_start_frame,
+        context.loop_end_frame,
         bass_notes.len(),
         lead_notes.len(),
         drum_events.len(),
@@ -2850,6 +2872,13 @@ fn write_render_plan_json(
     out.push_str(&format!(
         "  \"tempo\": {{\"bpm\": {:.3}, \"frames_per_beat\": {:.3}, \"grid_frames\": {}}},\n",
         context.bpm, context.frames_per_beat, context.grid_frames
+    ));
+    out.push_str(&format!(
+        "  \"loop\": {{\"start_frame\": {}, \"end_frame\": {}, \"start\": {:.6}, \"end\": {:.6}}},\n",
+        context.loop_start_frame,
+        context.loop_end_frame,
+        context.loop_start_frame as f32 * ANALYSIS_HOP as f32 / wav.sample_rate as f32,
+        context.loop_end_frame as f32 * ANALYSIS_HOP as f32 / wav.sample_rate as f32
     ));
     out.push_str("  \"mix\": {\"bass_gain\": 1.0, \"lead_gain\": 0.85, \"psg_gain\": 0.85, \"dac_gain\": 1.0},\n");
     out.push_str("  \"tracks\": [\n");

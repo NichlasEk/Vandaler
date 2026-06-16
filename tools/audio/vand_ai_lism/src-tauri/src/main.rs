@@ -73,6 +73,8 @@ struct AnalysisSummary {
     bass_notes: u32,
     lead_notes: u32,
     drum_events: u32,
+    loop_start: f32,
+    loop_end: f32,
     bundle_dir: String,
     import_metadata: String,
     dac_preview: String,
@@ -90,6 +92,10 @@ struct PreviewReport {
     lead_notes: u32,
     #[serde(default)]
     drum_events: u32,
+    #[serde(default)]
+    loop_start: f32,
+    #[serde(default)]
+    loop_end: f32,
 }
 
 #[derive(Serialize)]
@@ -1167,6 +1173,8 @@ async fn analyse_audio(input: String, output_dir: String) -> Result<AnalysisResu
             bass_notes: preview_report.bass_notes,
             lead_notes: preview_report.lead_notes,
             drum_events: preview_report.drum_events,
+            loop_start: preview_report.loop_start,
+            loop_end: preview_report.loop_end,
             import_metadata: bundle_dir.join("import.json").display().to_string(),
             dac_preview: bundle_dir.join("dac_preview.wav").display().to_string(),
             bundle_dir: bundle_dir.display().to_string(),
