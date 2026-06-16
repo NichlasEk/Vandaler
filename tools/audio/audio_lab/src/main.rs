@@ -14,6 +14,7 @@ const DEFAULT_INSTRUMENT_BANK: &str =
     "audio/instruments/vand_furnace_core/bank.vand-instruments.json";
 const DEFAULT_BASS_INSTRUMENT: &str = "growl_bass_wobbly";
 const DEFAULT_LEAD_INSTRUMENT: &str = "fm_grinder";
+const DEFAULT_PAD_INSTRUMENT: &str = "growl";
 const DEFAULT_NOISE_INSTRUMENT: &str = "psg_echo_warble";
 
 struct Args {
@@ -403,11 +404,47 @@ struct RuntimeEvent {
     fm1_fnum: u16,
     fm1_block: u8,
     fm1_level: u8,
+    fm2_fnum: u16,
+    fm2_block: u8,
+    fm2_level: u8,
     psg_noise_level: u8,
     kind: u8,
     dac_chunk: u8,
     dac_level: u8,
 }
+
+struct SgdkSymbols<'a> {
+    guard: &'a str,
+    event_array: &'a str,
+    event_count: &'a str,
+    dac_samples: &'a str,
+    dac_lengths: &'a str,
+    dac_rates: &'a str,
+    dac_count: &'a str,
+    dac_chunk_prefix: &'a str,
+}
+
+const GENERATED_SGDK_SYMBOLS: SgdkSymbols<'static> = SgdkSymbols {
+    guard: "GENERATED_AUDIO_H",
+    event_array: "generatedAudioEvents",
+    event_count: "generatedAudioEventCount",
+    dac_samples: "generatedAudioDacSamples",
+    dac_lengths: "generatedAudioDacLengths",
+    dac_rates: "generatedAudioDacRates",
+    dac_count: "generatedAudioDacCount",
+    dac_chunk_prefix: "generatedAudioDacChunk",
+};
+
+const MALMO_SGDK_SYMBOLS: SgdkSymbols<'static> = SgdkSymbols {
+    guard: "MALMO_MUSIC_H",
+    event_array: "malmoMusicEvents",
+    event_count: "malmoMusicEventCount",
+    dac_samples: "malmoMusicDacSamples",
+    dac_lengths: "malmoMusicDacLengths",
+    dac_rates: "malmoMusicDacRates",
+    dac_count: "malmoMusicDacCount",
+    dac_chunk_prefix: "malmoMusicDacChunk",
+};
 
 struct DacChunk {
     id: usize,
@@ -1734,6 +1771,9 @@ fn equivalent_runtime(a: &RuntimeEvent, b: &RuntimeEvent) -> bool {
         && a.fm1_fnum == b.fm1_fnum
         && a.fm1_block == b.fm1_block
         && a.fm1_level == b.fm1_level
+        && a.fm2_fnum == b.fm2_fnum
+        && a.fm2_block == b.fm2_block
+        && a.fm2_level == b.fm2_level
         && a.psg_noise_level == b.psg_noise_level
         && a.kind == b.kind
         && a.dac_chunk == b.dac_chunk
@@ -1789,6 +1829,7 @@ fn build_runtime_events_from_render_plan(
     loop_end_frame: usize,
     bass_notes: &[NoteEvent],
     lead_notes: &[NoteEvent],
+    pad_notes: &[NoteEvent],
     drum_events: &[DrumEvent],
 ) -> Vec<RuntimeEvent> {
     let loop_end_tick = analysis_frame_to_tick(loop_end_frame.max(1), sample_rate).max(1);
@@ -1798,6 +1839,9 @@ fn build_runtime_events_from_render_plan(
         push_note_change_points(&mut points, note, sample_rate);
     }
     for note in lead_notes {
+        push_note_change_points(&mut points, note, sample_rate);
+    }
+    for note in pad_notes {
         push_note_change_points(&mut points, note, sample_rate);
     }
     for drum in drum_events {
@@ -1825,9 +1869,13 @@ fn build_runtime_events_from_render_plan(
         let lead = lead_notes
             .iter()
             .find(|note| note_active_at_tick(note, tick, sample_rate));
+        let pad = pad_notes
+            .iter()
+            .find(|note| note_active_at_tick(note, tick, sample_rate));
         let drum = drum_at_tick(drum_events, tick, sample_rate);
         let (fm0_fnum, fm0_block, fm0_level) = note_to_runtime_pitch(bass);
         let (fm1_fnum, fm1_block, fm1_level) = note_to_runtime_pitch(lead);
+        let (fm2_fnum, fm2_block, fm2_level) = note_to_runtime_pitch(pad);
         let psg_noise_level = drum
             .map(|drum| level15(drum.noise_amp.max(drum.velocity * 0.7)))
             .unwrap_or(0);
@@ -1837,7 +1885,7 @@ fn build_runtime_events_from_render_plan(
             class_id("drum")
         } else if bass.is_some() {
             class_id("bass")
-        } else if lead.is_some() {
+        } else if lead.is_some() || pad.is_some() {
             class_id("tonal")
         } else {
             class_id("silence")
@@ -1851,6 +1899,9 @@ fn build_runtime_events_from_render_plan(
             fm1_fnum,
             fm1_block,
             fm1_level,
+            fm2_fnum,
+            fm2_block,
+            fm2_level,
             psg_noise_level,
             kind,
             dac_chunk,
@@ -1876,11 +1927,13 @@ fn build_render_plan_runtime_events(
 ) -> Vec<RuntimeEvent> {
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, sample_rate, chunks);
+    let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
     build_runtime_events_from_render_plan(
         sample_rate,
         context.loop_end_frame,
         &bass_notes,
         &lead_notes,
+        &pad_notes,
         &drum_events,
     )
 }
@@ -1892,7 +1945,7 @@ fn write_runtime_binary(path: &Path, sample_rate: u32, events: &[RuntimeEvent]) 
 
     let mut file = File::create(path)?;
     file.write_all(b"VADB")?;
-    file.write_all(&3u16.to_le_bytes())?;
+    file.write_all(&4u16.to_le_bytes())?;
     file.write_all(&(events.len() as u16).to_le_bytes())?;
     file.write_all(&(ANALYSIS_HOP as u16).to_le_bytes())?;
     file.write_all(&sample_rate.to_le_bytes())?;
@@ -1903,6 +1956,8 @@ fn write_runtime_binary(path: &Path, sample_rate: u32, events: &[RuntimeEvent]) 
         file.write_all(&[event.fm0_block, event.fm0_level])?;
         file.write_all(&event.fm1_fnum.to_le_bytes())?;
         file.write_all(&[event.fm1_block, event.fm1_level])?;
+        file.write_all(&event.fm2_fnum.to_le_bytes())?;
+        file.write_all(&[event.fm2_block, event.fm2_level])?;
         file.write_all(&[event.psg_noise_level, event.kind])?;
         file.write_all(&[event.dac_chunk, event.dac_level])?;
     }
@@ -1915,6 +1970,7 @@ fn write_sgdk_audio(
     source: &Path,
     events: &[RuntimeEvent],
     chunks: &[DacChunk],
+    symbols: &SgdkSymbols<'_>,
 ) -> io::Result<()> {
     if let Some(parent) = header.parent() {
         std::fs::create_dir_all(parent)?;
@@ -1923,17 +1979,24 @@ fn write_sgdk_audio(
         std::fs::create_dir_all(parent)?;
     }
 
-    let header_text = concat!(
-        "#ifndef GENERATED_AUDIO_H\n",
-        "#define GENERATED_AUDIO_H\n\n",
-        "#include \"vand_audio.h\"\n\n",
-        "extern const VandAudioEvent generatedAudioEvents[];\n",
-        "extern const u16 generatedAudioEventCount;\n\n",
-        "extern const u8 * const generatedAudioDacSamples[];\n",
-        "extern const u16 generatedAudioDacLengths[];\n",
-        "extern const u16 generatedAudioDacRates[];\n",
-        "extern const u16 generatedAudioDacCount;\n\n",
-        "#endif\n"
+    let header_text = format!(
+        "#ifndef {guard}\n\
+         #define {guard}\n\n\
+         #include \"vand_audio.h\"\n\n\
+         extern const VandAudioEvent {event_array}[];\n\
+         extern const u16 {event_count};\n\n\
+         extern const u8 * const {dac_samples}[];\n\
+         extern const u16 {dac_lengths}[];\n\
+         extern const u16 {dac_rates}[];\n\
+         extern const u16 {dac_count};\n\n\
+         #endif\n",
+        guard = symbols.guard,
+        event_array = symbols.event_array,
+        event_count = symbols.event_count,
+        dac_samples = symbols.dac_samples,
+        dac_lengths = symbols.dac_lengths,
+        dac_rates = symbols.dac_rates,
+        dac_count = symbols.dac_count
     );
     std::fs::write(header, header_text)?;
 
@@ -1945,28 +2008,38 @@ fn write_sgdk_audio(
     c.push_str(&format!("#include \"{}\"\n\n", include_name));
     for chunk in chunks {
         c.push_str(&format!(
-            "static const u8 generatedAudioDacChunk{:02}[] =\n{{\n",
-            chunk.id
+            "static const u8 {}{:02}[] =\n{{\n",
+            symbols.dac_chunk_prefix, chunk.id
         ));
         for row in chunk.samples.chunks(16) {
             c.push_str("    ");
-            for sample in row {
-                c.push_str(&format!("{}, ", sample));
+            for (index, sample) in row.iter().enumerate() {
+                if index > 0 {
+                    c.push_str(", ");
+                }
+                c.push_str(&sample.to_string());
             }
+            c.push(',');
             c.push('\n');
         }
         c.push_str("};\n\n");
     }
-    c.push_str("const u8 * const generatedAudioDacSamples[] =\n{\n");
+    c.push_str(&format!(
+        "const u8 * const {}[] =\n{{\n",
+        symbols.dac_samples
+    ));
     if chunks.is_empty() {
         c.push_str("    NULL,\n");
     } else {
         for chunk in chunks {
-            c.push_str(&format!("    generatedAudioDacChunk{:02},\n", chunk.id));
+            c.push_str(&format!(
+                "    {}{:02},\n",
+                symbols.dac_chunk_prefix, chunk.id
+            ));
         }
     }
     c.push_str("};\n\n");
-    c.push_str("const u16 generatedAudioDacLengths[] =\n{\n");
+    c.push_str(&format!("const u16 {}[] =\n{{\n", symbols.dac_lengths));
     if chunks.is_empty() {
         c.push_str("    0,\n");
     } else {
@@ -1975,7 +2048,7 @@ fn write_sgdk_audio(
         }
     }
     c.push_str("};\n\n");
-    c.push_str("const u16 generatedAudioDacRates[] =\n{\n");
+    c.push_str(&format!("const u16 {}[] =\n{{\n", symbols.dac_rates));
     if chunks.is_empty() {
         c.push_str("    0,\n");
     } else {
@@ -1985,13 +2058,17 @@ fn write_sgdk_audio(
     }
     c.push_str("};\n\n");
     c.push_str(&format!(
-        "const u16 generatedAudioDacCount = {};\n\n",
+        "const u16 {} = {};\n\n",
+        symbols.dac_count,
         chunks.len()
     ));
-    c.push_str("const VandAudioEvent generatedAudioEvents[] =\n{\n");
+    c.push_str(&format!(
+        "const VandAudioEvent {}[] =\n{{\n",
+        symbols.event_array
+    ));
     for event in events {
         c.push_str(&format!(
-            "    {{{}, 0x{:03X}, {}, {}, 0x{:03X}, {}, {}, {}, {}, {}, {}}},\n",
+            "    {{{}, 0x{:03X}, {}, {}, 0x{:03X}, {}, {}, 0x{:03X}, {}, {}, {}, {}, {}, {}}},\n",
             event.frames,
             event.fm0_fnum,
             event.fm0_block,
@@ -1999,6 +2076,9 @@ fn write_sgdk_audio(
             event.fm1_fnum,
             event.fm1_block,
             event.fm1_level,
+            event.fm2_fnum,
+            event.fm2_block,
+            event.fm2_level,
             event.psg_noise_level,
             event.kind,
             event.dac_chunk,
@@ -2006,9 +2086,10 @@ fn write_sgdk_audio(
         ));
     }
     c.push_str("};\n\n");
-    c.push_str(
-        "const u16 generatedAudioEventCount = sizeof(generatedAudioEvents) / sizeof(generatedAudioEvents[0]);\n",
-    );
+    c.push_str(&format!(
+        "const u16 {} = sizeof({}) / sizeof({}[0]);\n",
+        symbols.event_count, symbols.event_array, symbols.event_array
+    ));
     std::fs::write(source, c)
 }
 
@@ -2296,6 +2377,7 @@ fn write_runtime_preview_wav(
     let mut stereo = Vec::new();
     let mut bass_phase = 0.0f32;
     let mut lead_phase = 0.0f32;
+    let mut pad_phase = 0.0f32;
     let mut noise_state = 0x1234ABCDu32;
     let mut dac_active: Option<(&[u8], usize, u32)> = None;
     let mut dac_rate_accum = 0u32;
@@ -2312,8 +2394,10 @@ fn write_runtime_preview_wav(
         let samples = ((event.frames as u64 * PREVIEW_RATE as u64 + 30) / 60).max(1) as usize;
         let bass_hz = hz_from_ym2612_pitch(event.fm0_fnum, event.fm0_block);
         let lead_hz = hz_from_ym2612_pitch(event.fm1_fnum, event.fm1_block);
+        let pad_hz = hz_from_ym2612_pitch(event.fm2_fnum, event.fm2_block);
         let bass_gain = event.fm0_level as f32 / 15.0 * 0.35;
         let lead_gain = event.fm1_level as f32 / 15.0 * 0.28;
+        let pad_gain = event.fm2_level as f32 / 15.0 * 0.20;
         let noise_gain = event.psg_noise_level as f32 / 15.0 * 0.18;
         let dac_gain = event.dac_level as f32 / 15.0 * 0.50;
 
@@ -2327,6 +2411,10 @@ fn write_runtime_preview_wav(
             if lead_hz > 0.0 && event.fm1_level > 0 {
                 sample += lead_phase.sin() * lead_gain;
                 lead_phase += std::f32::consts::TAU * lead_hz / PREVIEW_RATE as f32;
+            }
+            if pad_hz > 0.0 && event.fm2_level > 0 {
+                sample += pad_phase.sin() * pad_gain;
+                pad_phase += std::f32::consts::TAU * pad_hz / PREVIEW_RATE as f32;
             }
             if event.psg_noise_level > 0 {
                 noise_state = noise_state
@@ -2724,6 +2812,56 @@ fn smooth_lead_melody(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<No
     merge_neighbor_notes(out)
 }
 
+fn build_harmony_pad_notes(
+    bass_notes: &[NoteEvent],
+    lead_notes: &[NoteEvent],
+    context: &MusicalContext,
+) -> Vec<NoteEvent> {
+    let third = if context.mode == "minor" { 3 } else { 4 };
+    let min_frames = context.frames_per_beat.round().max(8.0) as usize;
+    let mut out = Vec::new();
+
+    for (index, bass) in bass_notes.iter().enumerate() {
+        if bass.frames < min_frames || bass.velocity < 0.10 {
+            continue;
+        }
+
+        let bass_pc = bass.midi.rem_euclid(12);
+        let lead_bias = lead_notes
+            .iter()
+            .filter(|lead| note_overlap_frames(lead, bass) > 0)
+            .max_by_key(|lead| note_overlap_frames(lead, bass))
+            .map(|lead| lead.midi.rem_euclid(12));
+        let chord_pc = match lead_bias {
+            Some(pc) if scale_contains(context.key_root, context.mode, pc) => pc,
+            _ if index % 4 == 2 => (bass_pc + 7).rem_euclid(12),
+            _ => (bass_pc + third).rem_euclid(12),
+        };
+
+        let mut midi = 60 + chord_pc;
+        while midi - bass.midi > 24 {
+            midi -= 12;
+        }
+        while midi <= bass.midi + 7 {
+            midi += 12;
+        }
+        midi = fold_midi_to_range(midi, 48, 72);
+        midi = snap_midi_to_scale(midi, context.key_root, context.mode, 48, 72);
+
+        out.push(NoteEvent {
+            track: "pad",
+            start_frame: bass.start_frame,
+            frames: bass.frames,
+            midi,
+            hz: midi_to_hz(midi),
+            velocity: (bass.velocity * 0.45).clamp(0.10, 0.48),
+            instrument_id: DEFAULT_PAD_INSTRUMENT,
+        });
+    }
+
+    merge_neighbor_notes(out)
+}
+
 fn lock_bass_pattern(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<NoteEvent> {
     let bar_frames = (context.frames_per_beat * 4.0).round().max(16.0) as usize;
     let slot_count = 16usize;
@@ -2877,6 +3015,7 @@ fn write_preview_report_json(
     }
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, wav.sample_rate, chunks);
+    let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
     let dac_drums = drum_events
         .iter()
         .filter(|drum| drum.dac_chunk.is_some())
@@ -2923,6 +3062,7 @@ fn write_preview_report_json(
             "  \"active_frames\": {},\n",
             "  \"bass_notes\": {},\n",
             "  \"lead_notes\": {},\n",
+            "  \"pad_notes\": {},\n",
             "  \"drum_events\": {},\n",
             "  \"dac_drum_events\": {},\n",
             "  \"avg_bass_note_frames\": {:.3},\n",
@@ -2946,6 +3086,7 @@ fn write_preview_report_json(
         active_frames,
         bass_notes.len(),
         lead_notes.len(),
+        pad_notes.len(),
         drum_events.len(),
         dac_drums,
         avg_bass_frames,
@@ -2967,6 +3108,7 @@ fn write_note_arrangement_json(
 
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, wav.sample_rate, chunks);
+    let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
     let dac_drums = drum_events
         .iter()
         .filter(|drum| drum.dac_chunk.is_some())
@@ -2992,7 +3134,7 @@ fn write_note_arrangement_json(
             "  \"analysis\": {{\"key\": \"{} {}\", \"key_root\": {}, \"mode\": \"{}\", ",
             "\"key_confidence\": {:.5}, \"bpm\": {:.3}, \"frames_per_beat\": {:.3}, ",
             "\"grid_frames\": {}, \"loop_start_frame\": {}, \"loop_end_frame\": {}, ",
-            "\"bass_notes\": {}, \"lead_notes\": {}, \"drum_events\": {}, ",
+            "\"bass_notes\": {}, \"lead_notes\": {}, \"pad_notes\": {}, \"drum_events\": {}, ",
             "\"dac_drum_events\": {}}},\n"
         ),
         pitch_class_name(context.key_root),
@@ -3007,15 +3149,20 @@ fn write_note_arrangement_json(
         context.loop_end_frame,
         bass_notes.len(),
         lead_notes.len(),
+        pad_notes.len(),
         drum_events.len(),
         dac_drums
     ));
-    out.push_str("  \"pipeline\": [\"frame_analysis\", \"key_detection\", \"scale_snap\", \"beat_grid\", \"pitch_hysteresis\", \"bass_pattern_lock\", \"lead_confidence_filter\", \"lead_melodic_smoothing\", \"drum_gate\", \"drum_grid_lock\"],\n");
+    out.push_str("  \"pipeline\": [\"frame_analysis\", \"key_detection\", \"scale_snap\", \"beat_grid\", \"pitch_hysteresis\", \"bass_pattern_lock\", \"lead_confidence_filter\", \"lead_melodic_smoothing\", \"harmony_pad_arranger\", \"drum_gate\", \"drum_grid_lock\"],\n");
 
     out.push_str("  \"notes\": [\n");
-    let total_notes = bass_notes.len() + lead_notes.len();
+    let total_notes = bass_notes.len() + lead_notes.len() + pad_notes.len();
     let mut note_index = 0usize;
-    for note in bass_notes.iter().chain(lead_notes.iter()) {
+    for note in bass_notes
+        .iter()
+        .chain(lead_notes.iter())
+        .chain(pad_notes.iter())
+    {
         note_index += 1;
         let comma = if note_index == total_notes { "" } else { "," };
         out.push_str(&format!(
@@ -3079,6 +3226,7 @@ fn write_render_plan_json(
 
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, wav.sample_rate, chunks);
+    let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
     let duration = wav.samples.len() as f32 / wav.sample_rate as f32;
     let mut out = String::new();
     out.push_str("{\n");
@@ -3112,11 +3260,12 @@ fn write_render_plan_json(
     for (track_index, (role, chip, channel, notes)) in [
         ("bass", "ym2612", 0usize, bass_notes.as_slice()),
         ("lead", "ym2612", 1usize, lead_notes.as_slice()),
+        ("pad", "ym2612", 2usize, pad_notes.as_slice()),
     ]
     .iter()
     .enumerate()
     {
-        let track_comma = if track_index == 1 { "" } else { "," };
+        let track_comma = if track_index == 2 { "" } else { "," };
         out.push_str(&format!(
             "    {{\"role\": \"{}\", \"chip\": \"{}\", \"channel\": {}, \"events\": [\n",
             role, chip, channel
@@ -3213,6 +3362,7 @@ fn analyse_input(
         &bundle_dir.join("sgdk_audio.c"),
         &runtime_events,
         &dac_chunks,
+        &GENERATED_SGDK_SYMBOLS,
     )?;
     if install_sgdk {
         write_sgdk_audio(
@@ -3220,6 +3370,14 @@ fn analyse_input(
             Path::new("out/generated_audio.c"),
             &runtime_events,
             &dac_chunks,
+            &GENERATED_SGDK_SYMBOLS,
+        )?;
+        write_sgdk_audio(
+            Path::new("src/malmo_music.h"),
+            Path::new("src/malmo_music.c"),
+            &runtime_events,
+            &dac_chunks,
+            &MALMO_SGDK_SYMBOLS,
         )?;
     }
     let active = frames

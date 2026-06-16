@@ -10,6 +10,7 @@ const DEFAULT_INSTRUMENT_BANK: &str =
     "audio/instruments/vand_furnace_core/bank.vand-instruments.json";
 const DEFAULT_BASS_INSTRUMENT: &str = "growl_bass_wobbly";
 const DEFAULT_LEAD_INSTRUMENT: &str = "fm_grinder";
+const DEFAULT_PAD_INSTRUMENT: &str = "growl";
 const DEFAULT_NOISE_INSTRUMENT: &str = "psg_echo_warble";
 
 #[derive(Clone, Copy)]
@@ -861,10 +862,13 @@ fn render_note_arrangement_samples(
     let mut drum_index = 0usize;
     let mut bass_id = String::new();
     let mut lead_id = String::new();
+    let mut pad_id = String::new();
     let mut bass_end = 0usize;
     let mut lead_end = 0usize;
+    let mut pad_end = 0usize;
     let mut bass_on = false;
     let mut lead_on = false;
+    let mut pad_on = false;
     let mut noise_until = 0usize;
     let mut noise_amp = 0.0f32;
 
@@ -880,6 +884,14 @@ fn render_note_arrangement_samples(
                     &mut bass_on,
                     &mut bass_end,
                     DEFAULT_BASS_INSTRUMENT,
+                )
+            } else if note.track == "pad" {
+                (
+                    2usize,
+                    &mut pad_id,
+                    &mut pad_on,
+                    &mut pad_end,
+                    DEFAULT_PAD_INSTRUMENT,
                 )
             } else {
                 (
@@ -909,6 +921,8 @@ fn render_note_arrangement_samples(
             if let Some(instrument) = instruments.get(current_id.as_str()) {
                 let role_gain = if note.track == "bass" {
                     mix.bass_gain
+                } else if note.track == "pad" {
+                    mix.lead_gain * 0.72
                 } else {
                     mix.lead_gain
                 };
@@ -930,6 +944,10 @@ fn render_note_arrangement_samples(
         if lead_on && frame >= lead_end {
             fm_key_on(&mut audio, 1, false);
             lead_on = false;
+        }
+        if pad_on && frame >= pad_end {
+            fm_key_on(&mut audio, 2, false);
+            pad_on = false;
         }
 
         while drum_index < drums.len() && drums[drum_index].start_frame == frame {

@@ -2,6 +2,7 @@
 
 #define VAND_AUDIO_FM_BASS_CH 0
 #define VAND_AUDIO_FM_LEAD_CH 1
+#define VAND_AUDIO_FM_PAD_CH 2
 #define VAND_AUDIO_FM_KEY_ALL 0xF0
 #define VAND_AUDIO_DAC_NONE 255
 #define VAND_AUDIO_DAC_DEFAULT_RATE 8000
@@ -21,9 +22,9 @@ static u16 dacRateRemainder = 0;
 static u8 dacLevel = 0;
 static u16 psgHoldTone[2] = {0, 0};
 static u8 psgHoldFrames[2] = {0, 0};
-static u16 fmCurrentFnum[2] = {0, 0};
-static u8 fmCurrentBlock[2] = {0, 0};
-static u8 fmCurrentLevel[2] = {0, 0};
+static u16 fmCurrentFnum[3] = {0, 0, 0};
+static u8 fmCurrentBlock[3] = {0, 0, 0};
+static u8 fmCurrentLevel[3] = {0, 0, 0};
 
 static void ymKey(u8 channel, bool on)
 {
@@ -215,6 +216,7 @@ static void applyEvent(const VandAudioEvent *event)
 {
     ymApplyChannel(VAND_AUDIO_FM_BASS_CH, event->fm0_fnum, event->fm0_block, event->fm0_level);
     ymApplyChannel(VAND_AUDIO_FM_LEAD_CH, event->fm1_fnum, event->fm1_block, event->fm1_level);
+    ymApplyChannel(VAND_AUDIO_FM_PAD_CH, event->fm2_fnum, event->fm2_block, event->fm2_level);
 
     psgSetNoiseLevel(event->psg_noise_level, event->kind);
     psgSetToneLevel(1, event->fm0_fnum, event->fm0_block, event->fm0_level);
@@ -230,12 +232,16 @@ void VandAudio_init(void)
     YM2612_writeReg(0, 0x2A, 0x80);
     ymInitVoice(VAND_AUDIO_FM_BASS_CH, TRUE);
     ymInitVoice(VAND_AUDIO_FM_LEAD_CH, FALSE);
+    ymInitVoice(VAND_AUDIO_FM_PAD_CH, FALSE);
     fmCurrentFnum[0] = 0;
     fmCurrentFnum[1] = 0;
+    fmCurrentFnum[2] = 0;
     fmCurrentBlock[0] = 0;
     fmCurrentBlock[1] = 0;
+    fmCurrentBlock[2] = 0;
     fmCurrentLevel[0] = 0;
     fmCurrentLevel[1] = 0;
+    fmCurrentLevel[2] = 0;
     psgHoldTone[0] = 0;
     psgHoldTone[1] = 0;
     psgHoldFrames[0] = 0;
@@ -278,12 +284,16 @@ void VandAudio_stop(VandAudioPlayer *player)
 
     ymKey(VAND_AUDIO_FM_BASS_CH, FALSE);
     ymKey(VAND_AUDIO_FM_LEAD_CH, FALSE);
+    ymKey(VAND_AUDIO_FM_PAD_CH, FALSE);
     fmCurrentFnum[0] = 0;
     fmCurrentFnum[1] = 0;
+    fmCurrentFnum[2] = 0;
     fmCurrentBlock[0] = 0;
     fmCurrentBlock[1] = 0;
+    fmCurrentBlock[2] = 0;
     fmCurrentLevel[0] = 0;
     fmCurrentLevel[1] = 0;
+    fmCurrentLevel[2] = 0;
     psgHoldTone[0] = 0;
     psgHoldTone[1] = 0;
     psgHoldFrames[0] = 0;

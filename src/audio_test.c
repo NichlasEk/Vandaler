@@ -8,16 +8,16 @@
 #ifndef VAND_AUDIO_GENERATED
 static const VandAudioEvent audioTestPattern[] =
 {
-    {12, 0x43B, 1, 15, 0x35B, 4, 10, 0, VAND_AUDIO_CLASS_BASS, 255, 0},
-    {6, 0x43B, 1, 12, 0x3C5, 4, 12, 4, VAND_AUDIO_CLASS_TONAL, 255, 0},
-    {6, 0x4B8, 1, 13, 0x43B, 4, 12, 10, VAND_AUDIO_CLASS_DRUM, 255, 0},
-    {12, 0x3C5, 2, 14, 0x4B8, 4, 10, 0, VAND_AUDIO_CLASS_BASS, 255, 0},
-    {6, 0x35B, 2, 12, 0x55F, 4, 13, 3, VAND_AUDIO_CLASS_TONAL, 255, 0},
-    {6, 0x35B, 2, 10, 0x5FE, 4, 11, 12, VAND_AUDIO_CLASS_SAMPLE, 255, 0},
-    {12, 0x43B, 2, 15, 0x55F, 4, 10, 0, VAND_AUDIO_CLASS_BASS, 255, 0},
-    {6, 0x43B, 2, 12, 0x4B8, 4, 12, 2, VAND_AUDIO_CLASS_TONAL, 255, 0},
-    {6, 0x4B8, 2, 13, 0x43B, 4, 12, 15, VAND_AUDIO_CLASS_DRUM, 255, 0},
-    {18, 0x000, 0, 0, 0x000, 0, 0, 0, VAND_AUDIO_CLASS_SILENCE, 255, 0},
+    {12, 0x43B, 1, 15, 0x35B, 4, 10, 0x000, 0, 0, 0, VAND_AUDIO_CLASS_BASS, 255, 0},
+    {6, 0x43B, 1, 12, 0x3C5, 4, 12, 0x000, 0, 0, 4, VAND_AUDIO_CLASS_TONAL, 255, 0},
+    {6, 0x4B8, 1, 13, 0x43B, 4, 12, 0x000, 0, 0, 10, VAND_AUDIO_CLASS_DRUM, 255, 0},
+    {12, 0x3C5, 2, 14, 0x4B8, 4, 10, 0x000, 0, 0, 0, VAND_AUDIO_CLASS_BASS, 255, 0},
+    {6, 0x35B, 2, 12, 0x55F, 4, 13, 0x000, 0, 0, 3, VAND_AUDIO_CLASS_TONAL, 255, 0},
+    {6, 0x35B, 2, 10, 0x5FE, 4, 11, 0x000, 0, 0, 12, VAND_AUDIO_CLASS_SAMPLE, 255, 0},
+    {12, 0x43B, 2, 15, 0x55F, 4, 10, 0x000, 0, 0, 0, VAND_AUDIO_CLASS_BASS, 255, 0},
+    {6, 0x43B, 2, 12, 0x4B8, 4, 12, 0x000, 0, 0, 2, VAND_AUDIO_CLASS_TONAL, 255, 0},
+    {6, 0x4B8, 2, 13, 0x43B, 4, 12, 0x000, 0, 0, 15, VAND_AUDIO_CLASS_DRUM, 255, 0},
+    {18, 0x000, 0, 0, 0x000, 0, 0, 0x000, 0, 0, 0, VAND_AUDIO_CLASS_SILENCE, 255, 0},
 };
 #define AUDIO_TEST_EVENTS audioTestPattern
 #define AUDIO_TEST_EVENT_COUNT (sizeof(audioTestPattern) / sizeof(audioTestPattern[0]))

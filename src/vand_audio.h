@@ -23,6 +23,9 @@ typedef struct
     u16 fm1_fnum;
     u8 fm1_block;
     u8 fm1_level;
+    u16 fm2_fnum;
+    u8 fm2_block;
+    u8 fm2_level;
     u8 psg_noise_level;
     u8 kind;
     u8 dac_chunk;
