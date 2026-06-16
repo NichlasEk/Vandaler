@@ -407,6 +407,12 @@ struct RuntimeEvent {
     fm2_fnum: u16,
     fm2_block: u8,
     fm2_level: u8,
+    fm3_fnum: u16,
+    fm3_block: u8,
+    fm3_level: u8,
+    fm4_fnum: u16,
+    fm4_block: u8,
+    fm4_level: u8,
     psg_noise_level: u8,
     kind: u8,
     dac_chunk: u8,
@@ -1774,6 +1780,12 @@ fn equivalent_runtime(a: &RuntimeEvent, b: &RuntimeEvent) -> bool {
         && a.fm2_fnum == b.fm2_fnum
         && a.fm2_block == b.fm2_block
         && a.fm2_level == b.fm2_level
+        && a.fm3_fnum == b.fm3_fnum
+        && a.fm3_block == b.fm3_block
+        && a.fm3_level == b.fm3_level
+        && a.fm4_fnum == b.fm4_fnum
+        && a.fm4_block == b.fm4_block
+        && a.fm4_level == b.fm4_level
         && a.psg_noise_level == b.psg_noise_level
         && a.kind == b.kind
         && a.dac_chunk == b.dac_chunk
@@ -1830,6 +1842,8 @@ fn build_runtime_events_from_render_plan(
     bass_notes: &[NoteEvent],
     lead_notes: &[NoteEvent],
     pad_notes: &[NoteEvent],
+    chord_notes: &[NoteEvent],
+    counter_notes: &[NoteEvent],
     drum_events: &[DrumEvent],
 ) -> Vec<RuntimeEvent> {
     let loop_end_tick = analysis_frame_to_tick(loop_end_frame.max(1), sample_rate).max(1);
@@ -1842,6 +1856,12 @@ fn build_runtime_events_from_render_plan(
         push_note_change_points(&mut points, note, sample_rate);
     }
     for note in pad_notes {
+        push_note_change_points(&mut points, note, sample_rate);
+    }
+    for note in chord_notes {
+        push_note_change_points(&mut points, note, sample_rate);
+    }
+    for note in counter_notes {
         push_note_change_points(&mut points, note, sample_rate);
     }
     for drum in drum_events {
@@ -1872,10 +1892,18 @@ fn build_runtime_events_from_render_plan(
         let pad = pad_notes
             .iter()
             .find(|note| note_active_at_tick(note, tick, sample_rate));
+        let chord = chord_notes
+            .iter()
+            .find(|note| note_active_at_tick(note, tick, sample_rate));
+        let counter = counter_notes
+            .iter()
+            .find(|note| note_active_at_tick(note, tick, sample_rate));
         let drum = drum_at_tick(drum_events, tick, sample_rate);
         let (fm0_fnum, fm0_block, fm0_level) = note_to_runtime_pitch(bass);
         let (fm1_fnum, fm1_block, fm1_level) = note_to_runtime_pitch(lead);
         let (fm2_fnum, fm2_block, fm2_level) = note_to_runtime_pitch(pad);
+        let (fm3_fnum, fm3_block, fm3_level) = note_to_runtime_pitch(chord);
+        let (fm4_fnum, fm4_block, fm4_level) = note_to_runtime_pitch(counter);
         let psg_noise_level = drum
             .map(|drum| level15(drum.noise_amp.max(drum.velocity * 0.7)))
             .unwrap_or(0);
@@ -1885,7 +1913,7 @@ fn build_runtime_events_from_render_plan(
             class_id("drum")
         } else if bass.is_some() {
             class_id("bass")
-        } else if lead.is_some() || pad.is_some() {
+        } else if lead.is_some() || pad.is_some() || chord.is_some() || counter.is_some() {
             class_id("tonal")
         } else {
             class_id("silence")
@@ -1902,6 +1930,12 @@ fn build_runtime_events_from_render_plan(
             fm2_fnum,
             fm2_block,
             fm2_level,
+            fm3_fnum,
+            fm3_block,
+            fm3_level,
+            fm4_fnum,
+            fm4_block,
+            fm4_level,
             psg_noise_level,
             kind,
             dac_chunk,
@@ -1928,12 +1962,16 @@ fn build_render_plan_runtime_events(
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, sample_rate, chunks);
     let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
+    let chord_notes = build_chord_body_notes(&bass_notes, &lead_notes, &context);
+    let counter_notes = build_counter_melody_notes(&lead_notes, &context);
     build_runtime_events_from_render_plan(
         sample_rate,
         context.loop_end_frame,
         &bass_notes,
         &lead_notes,
         &pad_notes,
+        &chord_notes,
+        &counter_notes,
         &drum_events,
     )
 }
@@ -1945,7 +1983,7 @@ fn write_runtime_binary(path: &Path, sample_rate: u32, events: &[RuntimeEvent]) 
 
     let mut file = File::create(path)?;
     file.write_all(b"VADB")?;
-    file.write_all(&4u16.to_le_bytes())?;
+    file.write_all(&5u16.to_le_bytes())?;
     file.write_all(&(events.len() as u16).to_le_bytes())?;
     file.write_all(&(ANALYSIS_HOP as u16).to_le_bytes())?;
     file.write_all(&sample_rate.to_le_bytes())?;
@@ -1958,6 +1996,10 @@ fn write_runtime_binary(path: &Path, sample_rate: u32, events: &[RuntimeEvent]) 
         file.write_all(&[event.fm1_block, event.fm1_level])?;
         file.write_all(&event.fm2_fnum.to_le_bytes())?;
         file.write_all(&[event.fm2_block, event.fm2_level])?;
+        file.write_all(&event.fm3_fnum.to_le_bytes())?;
+        file.write_all(&[event.fm3_block, event.fm3_level])?;
+        file.write_all(&event.fm4_fnum.to_le_bytes())?;
+        file.write_all(&[event.fm4_block, event.fm4_level])?;
         file.write_all(&[event.psg_noise_level, event.kind])?;
         file.write_all(&[event.dac_chunk, event.dac_level])?;
     }
@@ -2068,7 +2110,10 @@ fn write_sgdk_audio(
     ));
     for event in events {
         c.push_str(&format!(
-            "    {{{}, 0x{:03X}, {}, {}, 0x{:03X}, {}, {}, 0x{:03X}, {}, {}, {}, {}, {}, {}}},\n",
+            concat!(
+                "    {{{}, 0x{:03X}, {}, {}, 0x{:03X}, {}, {}, 0x{:03X}, {}, {}, ",
+                "0x{:03X}, {}, {}, 0x{:03X}, {}, {}, {}, {}, {}, {}}},\n"
+            ),
             event.frames,
             event.fm0_fnum,
             event.fm0_block,
@@ -2079,6 +2124,12 @@ fn write_sgdk_audio(
             event.fm2_fnum,
             event.fm2_block,
             event.fm2_level,
+            event.fm3_fnum,
+            event.fm3_block,
+            event.fm3_level,
+            event.fm4_fnum,
+            event.fm4_block,
+            event.fm4_level,
             event.psg_noise_level,
             event.kind,
             event.dac_chunk,
@@ -2378,6 +2429,8 @@ fn write_runtime_preview_wav(
     let mut bass_phase = 0.0f32;
     let mut lead_phase = 0.0f32;
     let mut pad_phase = 0.0f32;
+    let mut chord_phase = 0.0f32;
+    let mut counter_phase = 0.0f32;
     let mut noise_state = 0x1234ABCDu32;
     let mut dac_active: Option<(&[u8], usize, u32)> = None;
     let mut dac_rate_accum = 0u32;
@@ -2395,9 +2448,13 @@ fn write_runtime_preview_wav(
         let bass_hz = hz_from_ym2612_pitch(event.fm0_fnum, event.fm0_block);
         let lead_hz = hz_from_ym2612_pitch(event.fm1_fnum, event.fm1_block);
         let pad_hz = hz_from_ym2612_pitch(event.fm2_fnum, event.fm2_block);
+        let chord_hz = hz_from_ym2612_pitch(event.fm3_fnum, event.fm3_block);
+        let counter_hz = hz_from_ym2612_pitch(event.fm4_fnum, event.fm4_block);
         let bass_gain = event.fm0_level as f32 / 15.0 * 0.35;
         let lead_gain = event.fm1_level as f32 / 15.0 * 0.28;
         let pad_gain = event.fm2_level as f32 / 15.0 * 0.20;
+        let chord_gain = event.fm3_level as f32 / 15.0 * 0.16;
+        let counter_gain = event.fm4_level as f32 / 15.0 * 0.14;
         let noise_gain = event.psg_noise_level as f32 / 15.0 * 0.18;
         let dac_gain = event.dac_level as f32 / 15.0 * 0.50;
 
@@ -2415,6 +2472,14 @@ fn write_runtime_preview_wav(
             if pad_hz > 0.0 && event.fm2_level > 0 {
                 sample += pad_phase.sin() * pad_gain;
                 pad_phase += std::f32::consts::TAU * pad_hz / PREVIEW_RATE as f32;
+            }
+            if chord_hz > 0.0 && event.fm3_level > 0 {
+                sample += chord_phase.sin() * chord_gain;
+                chord_phase += std::f32::consts::TAU * chord_hz / PREVIEW_RATE as f32;
+            }
+            if counter_hz > 0.0 && event.fm4_level > 0 {
+                sample += counter_phase.sin() * counter_gain;
+                counter_phase += std::f32::consts::TAU * counter_hz / PREVIEW_RATE as f32;
             }
             if event.psg_noise_level > 0 {
                 noise_state = noise_state
@@ -2862,6 +2927,83 @@ fn build_harmony_pad_notes(
     merge_neighbor_notes(out)
 }
 
+fn build_chord_body_notes(
+    bass_notes: &[NoteEvent],
+    lead_notes: &[NoteEvent],
+    context: &MusicalContext,
+) -> Vec<NoteEvent> {
+    let fifth = 7;
+    let min_frames = (context.frames_per_beat * 0.75).round().max(8.0) as usize;
+    let mut out = Vec::new();
+
+    for bass in bass_notes {
+        if bass.frames < min_frames || bass.velocity < 0.14 {
+            continue;
+        }
+
+        let lead_pc = lead_notes
+            .iter()
+            .filter(|lead| note_overlap_frames(lead, bass) > bass.frames / 4)
+            .max_by_key(|lead| note_overlap_frames(lead, bass))
+            .map(|lead| lead.midi.rem_euclid(12));
+        let pc = lead_pc.unwrap_or_else(|| (bass.midi + fifth).rem_euclid(12));
+        let mut midi = 60 + pc;
+        while midi <= bass.midi + 12 {
+            midi += 12;
+        }
+        midi = fold_midi_to_range(midi, 52, 76);
+        midi = snap_midi_to_scale(midi, context.key_root, context.mode, 52, 76);
+
+        out.push(NoteEvent {
+            track: "chord",
+            start_frame: bass.start_frame,
+            frames: bass.frames,
+            midi,
+            hz: midi_to_hz(midi),
+            velocity: (bass.velocity * 0.34).clamp(0.08, 0.38),
+            instrument_id: DEFAULT_PAD_INSTRUMENT,
+        });
+    }
+
+    merge_neighbor_notes(out)
+}
+
+fn build_counter_melody_notes(
+    lead_notes: &[NoteEvent],
+    context: &MusicalContext,
+) -> Vec<NoteEvent> {
+    let mut out = Vec::new();
+    let min_frames = (context.frames_per_beat * 0.45).round().max(6.0) as usize;
+
+    for (index, lead) in lead_notes.iter().enumerate() {
+        if lead.frames < min_frames || lead.velocity < 0.16 || index % 3 == 1 {
+            continue;
+        }
+
+        let interval = if index % 4 == 0 { -12 } else { 12 };
+        let mut midi = lead.midi + interval;
+        midi = fold_midi_to_range(midi, 48, 84);
+        midi = snap_midi_to_scale(midi, context.key_root, context.mode, 48, 84);
+        if (midi - lead.midi).abs() < 5 {
+            continue;
+        }
+
+        let start_frame = lead.start_frame + (lead.frames / 4);
+        let frames = (lead.frames * 3 / 4).max(1);
+        out.push(NoteEvent {
+            track: "counter",
+            start_frame,
+            frames,
+            midi,
+            hz: midi_to_hz(midi),
+            velocity: (lead.velocity * 0.36).clamp(0.08, 0.34),
+            instrument_id: DEFAULT_LEAD_INSTRUMENT,
+        });
+    }
+
+    merge_neighbor_notes(out)
+}
+
 fn lock_bass_pattern(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<NoteEvent> {
     let bar_frames = (context.frames_per_beat * 4.0).round().max(16.0) as usize;
     let slot_count = 16usize;
@@ -3016,6 +3158,8 @@ fn write_preview_report_json(
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, wav.sample_rate, chunks);
     let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
+    let chord_notes = build_chord_body_notes(&bass_notes, &lead_notes, &context);
+    let counter_notes = build_counter_melody_notes(&lead_notes, &context);
     let dac_drums = drum_events
         .iter()
         .filter(|drum| drum.dac_chunk.is_some())
@@ -3063,6 +3207,8 @@ fn write_preview_report_json(
             "  \"bass_notes\": {},\n",
             "  \"lead_notes\": {},\n",
             "  \"pad_notes\": {},\n",
+            "  \"chord_notes\": {},\n",
+            "  \"counter_notes\": {},\n",
             "  \"drum_events\": {},\n",
             "  \"dac_drum_events\": {},\n",
             "  \"avg_bass_note_frames\": {:.3},\n",
@@ -3087,6 +3233,8 @@ fn write_preview_report_json(
         bass_notes.len(),
         lead_notes.len(),
         pad_notes.len(),
+        chord_notes.len(),
+        counter_notes.len(),
         drum_events.len(),
         dac_drums,
         avg_bass_frames,
@@ -3109,6 +3257,8 @@ fn write_note_arrangement_json(
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, wav.sample_rate, chunks);
     let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
+    let chord_notes = build_chord_body_notes(&bass_notes, &lead_notes, &context);
+    let counter_notes = build_counter_melody_notes(&lead_notes, &context);
     let dac_drums = drum_events
         .iter()
         .filter(|drum| drum.dac_chunk.is_some())
@@ -3134,7 +3284,8 @@ fn write_note_arrangement_json(
             "  \"analysis\": {{\"key\": \"{} {}\", \"key_root\": {}, \"mode\": \"{}\", ",
             "\"key_confidence\": {:.5}, \"bpm\": {:.3}, \"frames_per_beat\": {:.3}, ",
             "\"grid_frames\": {}, \"loop_start_frame\": {}, \"loop_end_frame\": {}, ",
-            "\"bass_notes\": {}, \"lead_notes\": {}, \"pad_notes\": {}, \"drum_events\": {}, ",
+            "\"bass_notes\": {}, \"lead_notes\": {}, \"pad_notes\": {}, ",
+            "\"chord_notes\": {}, \"counter_notes\": {}, \"drum_events\": {}, ",
             "\"dac_drum_events\": {}}},\n"
         ),
         pitch_class_name(context.key_root),
@@ -3150,18 +3301,26 @@ fn write_note_arrangement_json(
         bass_notes.len(),
         lead_notes.len(),
         pad_notes.len(),
+        chord_notes.len(),
+        counter_notes.len(),
         drum_events.len(),
         dac_drums
     ));
-    out.push_str("  \"pipeline\": [\"frame_analysis\", \"key_detection\", \"scale_snap\", \"beat_grid\", \"pitch_hysteresis\", \"bass_pattern_lock\", \"lead_confidence_filter\", \"lead_melodic_smoothing\", \"harmony_pad_arranger\", \"drum_gate\", \"drum_grid_lock\"],\n");
+    out.push_str("  \"pipeline\": [\"frame_analysis\", \"key_detection\", \"scale_snap\", \"beat_grid\", \"pitch_hysteresis\", \"bass_pattern_lock\", \"lead_confidence_filter\", \"lead_melodic_smoothing\", \"harmony_pad_arranger\", \"chord_body_arranger\", \"counter_melody_arranger\", \"drum_gate\", \"drum_grid_lock\"],\n");
 
     out.push_str("  \"notes\": [\n");
-    let total_notes = bass_notes.len() + lead_notes.len() + pad_notes.len();
+    let total_notes = bass_notes.len()
+        + lead_notes.len()
+        + pad_notes.len()
+        + chord_notes.len()
+        + counter_notes.len();
     let mut note_index = 0usize;
     for note in bass_notes
         .iter()
         .chain(lead_notes.iter())
         .chain(pad_notes.iter())
+        .chain(chord_notes.iter())
+        .chain(counter_notes.iter())
     {
         note_index += 1;
         let comma = if note_index == total_notes { "" } else { "," };
@@ -3227,6 +3386,8 @@ fn write_render_plan_json(
     let (context, bass_notes, lead_notes, drum_events) =
         build_note_preview_data(frames, wav.sample_rate, chunks);
     let pad_notes = build_harmony_pad_notes(&bass_notes, &lead_notes, &context);
+    let chord_notes = build_chord_body_notes(&bass_notes, &lead_notes, &context);
+    let counter_notes = build_counter_melody_notes(&lead_notes, &context);
     let duration = wav.samples.len() as f32 / wav.sample_rate as f32;
     let mut out = String::new();
     out.push_str("{\n");
@@ -3261,11 +3422,13 @@ fn write_render_plan_json(
         ("bass", "ym2612", 0usize, bass_notes.as_slice()),
         ("lead", "ym2612", 1usize, lead_notes.as_slice()),
         ("pad", "ym2612", 2usize, pad_notes.as_slice()),
+        ("chord", "ym2612", 3usize, chord_notes.as_slice()),
+        ("counter", "ym2612", 4usize, counter_notes.as_slice()),
     ]
     .iter()
     .enumerate()
     {
-        let track_comma = if track_index == 2 { "" } else { "," };
+        let track_comma = if track_index == 4 { "" } else { "," };
         out.push_str(&format!(
             "    {{\"role\": \"{}\", \"chip\": \"{}\", \"channel\": {}, \"events\": [\n",
             role, chip, channel

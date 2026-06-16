@@ -444,28 +444,30 @@ fn write_fm_patch(audio: &mut Audio, instrument: &VandInstrument, channel: usize
     let Some(fm) = instrument.fm.as_ref() else {
         return;
     };
+    let part = if channel >= 3 { 1 } else { 0 };
+    let slot = (channel % 3) as u8;
 
     audio.ym2612.write_register(
-        0,
-        0xb0 + channel as u8,
+        part,
+        0xb0 + slot,
         (fm.algorithm & 0x07) | ((fm.feedback & 0x07) << 3),
         None,
         true,
     );
     audio
         .ym2612
-        .write_register(0, 0xb4 + channel as u8, 0xc0, None, true);
+        .write_register(part, 0xb4 + slot, 0xc0, None, true);
     for (index, op) in fm.operators.iter().take(4).enumerate() {
-        let reg = OP_OFFSETS[index] + channel as u8;
+        let reg = OP_OFFSETS[index] + slot;
         audio.ym2612.write_register(
-            0,
+            part,
             0x30 + reg,
             ((op.dt & 0x07) << 4) | (op.mult & 0x0f),
             None,
             true,
         );
         audio.ym2612.write_register(
-            0,
+            part,
             0x40 + reg,
             op.tl.saturating_add(attenuation).min(127),
             None,
@@ -473,41 +475,48 @@ fn write_fm_patch(audio: &mut Audio, instrument: &VandInstrument, channel: usize
         );
         audio
             .ym2612
-            .write_register(0, 0x50 + reg, op.ar.min(31), None, true);
+            .write_register(part, 0x50 + reg, op.ar.min(31), None, true);
         audio
             .ym2612
-            .write_register(0, 0x60 + reg, op.dr.min(31), None, true);
-        audio.ym2612.write_register(0, 0x70 + reg, 0x04, None, true);
+            .write_register(part, 0x60 + reg, op.dr.min(31), None, true);
+        audio
+            .ym2612
+            .write_register(part, 0x70 + reg, 0x04, None, true);
         audio.ym2612.write_register(
-            0,
+            part,
             0x80 + reg,
             ((op.sl.min(15)) << 4) | op.rr.min(15),
             None,
             true,
         );
-        audio.ym2612.write_register(0, 0x90 + reg, 0x00, None, true);
+        audio
+            .ym2612
+            .write_register(part, 0x90 + reg, 0x00, None, true);
     }
 }
 
 fn write_fm_pitch(audio: &mut Audio, channel: usize, hz: f32) {
     let (fnum, block) = ym2612_pitch_for_hz(hz);
+    let part = if channel >= 3 { 1 } else { 0 };
+    let slot = (channel % 3) as u8;
     audio.ym2612.write_register(
-        0,
-        0xa4 + channel as u8,
+        part,
+        0xa4 + slot,
         ((block & 0x07) << 3) | ((fnum >> 8) as u8 & 0x07),
         None,
         true,
     );
     audio
         .ym2612
-        .write_register(0, 0xa0 + channel as u8, (fnum & 0xff) as u8, None, true);
+        .write_register(part, 0xa0 + slot, (fnum & 0xff) as u8, None, true);
 }
 
 fn fm_key_on(audio: &mut Audio, channel: usize, on: bool) {
+    let key_channel = if channel >= 3 { channel + 1 } else { channel };
     let value = if on {
-        0xf0 | channel as u8
+        0xf0 | key_channel as u8
     } else {
-        channel as u8
+        key_channel as u8
     };
     audio.ym2612.write_register(0, 0x28, value, Some(0), true);
 }
@@ -882,12 +891,18 @@ fn render_note_arrangement_samples(
     let mut bass_id = String::new();
     let mut lead_id = String::new();
     let mut pad_id = String::new();
+    let mut chord_id = String::new();
+    let mut counter_id = String::new();
     let mut bass_end = 0usize;
     let mut lead_end = 0usize;
     let mut pad_end = 0usize;
+    let mut chord_end = 0usize;
+    let mut counter_end = 0usize;
     let mut bass_on = false;
     let mut lead_on = false;
     let mut pad_on = false;
+    let mut chord_on = false;
+    let mut counter_on = false;
     let mut noise_until = 0usize;
     let mut noise_amp = 0.0f32;
 
@@ -911,6 +926,22 @@ fn render_note_arrangement_samples(
                     &mut pad_on,
                     &mut pad_end,
                     DEFAULT_PAD_INSTRUMENT,
+                )
+            } else if note.track == "chord" {
+                (
+                    3usize,
+                    &mut chord_id,
+                    &mut chord_on,
+                    &mut chord_end,
+                    DEFAULT_PAD_INSTRUMENT,
+                )
+            } else if note.track == "counter" {
+                (
+                    4usize,
+                    &mut counter_id,
+                    &mut counter_on,
+                    &mut counter_end,
+                    DEFAULT_LEAD_INSTRUMENT,
                 )
             } else {
                 (
@@ -942,6 +973,10 @@ fn render_note_arrangement_samples(
                     mix.bass_gain
                 } else if note.track == "pad" {
                     mix.lead_gain * 0.72
+                } else if note.track == "chord" {
+                    mix.lead_gain * 0.58
+                } else if note.track == "counter" {
+                    mix.lead_gain * 0.52
                 } else {
                     mix.lead_gain
                 };
@@ -967,6 +1002,14 @@ fn render_note_arrangement_samples(
         if pad_on && frame >= pad_end {
             fm_key_on(&mut audio, 2, false);
             pad_on = false;
+        }
+        if chord_on && frame >= chord_end {
+            fm_key_on(&mut audio, 3, false);
+            chord_on = false;
+        }
+        if counter_on && frame >= counter_end {
+            fm_key_on(&mut audio, 4, false);
+            counter_on = false;
         }
 
         while drum_index < drums.len() && drums[drum_index].start_frame == frame {
