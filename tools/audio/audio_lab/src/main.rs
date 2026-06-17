@@ -1,4 +1,5 @@
 use euther_oxide::{Emulator, controller::Controller};
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -2569,6 +2570,167 @@ where
     out
 }
 
+fn ai_phrase_signature(
+    notes: &[NoteEvent],
+    start_frame: usize,
+    phrase_frames: usize,
+) -> Option<String> {
+    let end_frame = start_frame.saturating_add(phrase_frames);
+    let mut phrase_notes = notes
+        .iter()
+        .filter(|note| {
+            note.start_frame >= start_frame
+                && note.start_frame < end_frame
+                && note.velocity >= 0.18
+                && note.frames >= 3
+        })
+        .take(10)
+        .collect::<Vec<_>>();
+    if phrase_notes.len() < 4 {
+        return None;
+    }
+    phrase_notes.sort_by_key(|note| note.start_frame);
+    let distinct_pitches = phrase_notes
+        .iter()
+        .map(|note| note.midi.rem_euclid(12))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if distinct_pitches < 3 {
+        return None;
+    }
+    let first_midi = phrase_notes[0].midi;
+    let slot_frames = (phrase_frames / 16).max(1);
+    let mut signature = String::new();
+    for note in phrase_notes.iter().take(8) {
+        let slot = note.start_frame.saturating_sub(start_frame) / slot_frames;
+        let interval = (note.midi - first_midi).clamp(-12, 12);
+        let length = (note.frames / slot_frames.max(1)).clamp(1, 8);
+        signature.push_str(&format!("{slot}:{interval}:{length};"));
+    }
+    Some(signature)
+}
+
+fn ai_phrase_notes(
+    notes: &[NoteEvent],
+    start_frame: usize,
+    phrase_frames: usize,
+) -> Vec<NoteEvent> {
+    let end_frame = start_frame.saturating_add(phrase_frames);
+    notes
+        .iter()
+        .filter(|note| note.start_frame >= start_frame && note.start_frame < end_frame)
+        .cloned()
+        .collect()
+}
+
+fn find_ai_hook_seed(lead_notes: &[NoteEvent], context: &MusicalContext) -> Vec<NoteEvent> {
+    if lead_notes.len() < 12 {
+        return Vec::new();
+    }
+    let phrase_frames = (context.frames_per_beat * 4.0).round().max(24.0) as usize;
+    let mut stats: HashMap<String, (usize, f32, usize)> = HashMap::new();
+
+    for note in lead_notes {
+        let phrase_start = snap_frame_to_grid(
+            note.start_frame,
+            context.grid_frames.max(1),
+            context.grid_frames.max(1),
+            context.grid_offset_frame,
+        );
+        let Some(signature) = ai_phrase_signature(lead_notes, phrase_start, phrase_frames) else {
+            continue;
+        };
+        let phrase = ai_phrase_notes(lead_notes, phrase_start, phrase_frames);
+        let energy = phrase
+            .iter()
+            .map(|note| note.velocity * note.frames as f32)
+            .sum::<f32>()
+            / phrase_frames.max(1) as f32;
+        let melodic_span = phrase
+            .iter()
+            .map(|note| note.midi)
+            .min()
+            .zip(phrase.iter().map(|note| note.midi).max())
+            .map(|(lo, hi)| (hi - lo).abs() as f32 / 12.0)
+            .unwrap_or(0.0);
+        let early_bias = 1.0 / (1.0 + phrase_start as f32 / phrase_frames.max(1) as f32 * 0.18);
+        let score = energy * 2.0 + melodic_span.min(1.5) + early_bias;
+        stats
+            .entry(signature)
+            .and_modify(|entry| {
+                entry.0 += 1;
+                entry.1 += score;
+                if score > entry.1 / entry.0.max(1) as f32 {
+                    entry.2 = phrase_start;
+                }
+            })
+            .or_insert((1, score, phrase_start));
+    }
+
+    let Some((_, (count, score, start_frame))) = stats.into_iter().max_by(|a, b| {
+        let a_score = a.1.0 as f32 * 2.4 + a.1.1;
+        let b_score = b.1.0 as f32 * 2.4 + b.1.1;
+        a_score
+            .partial_cmp(&b_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) else {
+        return Vec::new();
+    };
+    if count < 2 && score < 3.0 {
+        return Vec::new();
+    }
+    ai_phrase_notes(lead_notes, start_frame, phrase_frames)
+}
+
+fn repeat_ai_phrase_as_track(
+    seed: &[NoteEvent],
+    context: &MusicalContext,
+    track: &'static str,
+    velocity_scale: f32,
+    octave_shift: i32,
+) -> Vec<NoteEvent> {
+    if seed.len() < 4 {
+        return Vec::new();
+    }
+    let phrase_start = seed
+        .iter()
+        .map(|note| note.start_frame)
+        .min()
+        .unwrap_or(context.grid_offset_frame);
+    let phrase_frames = (context.frames_per_beat * 4.0).round().max(24.0) as usize;
+    let repeat_frames = phrase_frames * 2;
+    let mut out = Vec::new();
+    let mut cursor = context.grid_offset_frame;
+    while cursor < context.loop_end_frame {
+        for note in seed {
+            let relative = note.start_frame.saturating_sub(phrase_start);
+            if relative >= phrase_frames {
+                continue;
+            }
+            let start_frame = cursor.saturating_add(relative);
+            if start_frame >= context.loop_end_frame {
+                continue;
+            }
+            let mut midi = fold_midi_to_range(note.midi + octave_shift, 55, 92);
+            midi = snap_midi_to_scale(midi, context.key_root, context.mode, 55, 92);
+            out.push(NoteEvent {
+                track,
+                start_frame,
+                frames: note
+                    .frames
+                    .min(phrase_frames.saturating_sub(relative).max(1))
+                    .max(3),
+                midi,
+                hz: midi_to_hz(midi),
+                velocity: (note.velocity * velocity_scale).clamp(0.12, 0.95),
+                instrument_id: DEFAULT_LEAD_INSTRUMENT,
+            });
+        }
+        cursor = cursor.saturating_add(repeat_frames.max(1));
+    }
+    merge_neighbor_notes(out)
+}
+
 fn build_ai_melodic_layers(
     ai_events: &[AiNoteEvent],
     context: &MusicalContext,
@@ -2599,19 +2761,32 @@ fn build_ai_melodic_layers(
         })
         .collect::<Vec<_>>();
 
-    let hook = lead
-        .iter()
-        .enumerate()
-        .filter(|(index, note)| *index % 3 == 0 && note.frames >= 6 && note.velocity >= 0.18)
-        .map(|(_, note)| {
-            let mut hook = note.clone();
-            hook.track = "hook";
-            hook.midi = fold_midi_to_range(hook.midi + 12, 67, 96);
-            hook.hz = midi_to_hz(hook.midi);
-            hook.velocity = (hook.velocity * 0.62).clamp(0.08, 0.42);
-            hook
-        })
-        .collect::<Vec<_>>();
+    let lead = merge_neighbor_notes(lead);
+    let phrase_seed = find_ai_hook_seed(&lead, context);
+    let phrase_lead = repeat_ai_phrase_as_track(&phrase_seed, context, "lead", 1.42, 0);
+    let phrase_hook = repeat_ai_phrase_as_track(&phrase_seed, context, "hook", 0.70, 12);
+
+    let hook = if phrase_hook.len() >= 8 {
+        phrase_hook
+    } else {
+        lead.iter()
+            .enumerate()
+            .filter(|(index, note)| *index % 3 == 0 && note.frames >= 6 && note.velocity >= 0.18)
+            .map(|(_, note)| {
+                let mut hook = note.clone();
+                hook.track = "hook";
+                hook.midi = fold_midi_to_range(hook.midi + 12, 67, 96);
+                hook.hz = midi_to_hz(hook.midi);
+                hook.velocity = (hook.velocity * 0.62).clamp(0.08, 0.42);
+                hook
+            })
+            .collect::<Vec<_>>()
+    };
+    let lead = if phrase_lead.len() >= 8 {
+        phrase_lead
+    } else {
+        lead
+    };
 
     let counter_events = ai_events
         .iter()
