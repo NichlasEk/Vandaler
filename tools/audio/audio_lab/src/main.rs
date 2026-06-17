@@ -532,6 +532,14 @@ struct DrumEvent {
     dac_path: String,
 }
 
+#[derive(Clone)]
+struct AiNoteEvent {
+    start_frame: usize,
+    frames: usize,
+    midi: i32,
+    velocity: f32,
+}
+
 fn read_u16_le(bytes: &[u8]) -> u16 {
     u16::from_le_bytes([bytes[0], bytes[1]])
 }
@@ -2440,6 +2448,262 @@ fn build_render_plan_runtime_events(
     )
 }
 
+fn extract_json_number(line: &str, key: &str) -> Option<f32> {
+    let needle = format!("\"{}\":", key);
+    let start = line.find(&needle)? + needle.len();
+    let tail = line[start..].trim_start();
+    let end = tail
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+')))
+        .unwrap_or(tail.len());
+    tail[..end].parse::<f32>().ok()
+}
+
+fn read_ai_note_events(path: &Path, sample_rate: u32) -> io::Result<Vec<AiNoteEvent>> {
+    let text = std::fs::read_to_string(path)?;
+    let frames_per_second = sample_rate as f32 / ANALYSIS_HOP as f32;
+    let mut events = Vec::new();
+    for line in text.lines() {
+        if !line.contains("\"start_time\"") || !line.contains("\"midi\"") {
+            continue;
+        }
+        let Some(start_time) = extract_json_number(line, "start_time") else {
+            continue;
+        };
+        let Some(duration) = extract_json_number(line, "duration") else {
+            continue;
+        };
+        let Some(midi) = extract_json_number(line, "midi") else {
+            continue;
+        };
+        let velocity = extract_json_number(line, "velocity").unwrap_or(0.0);
+        if duration < 0.045 || velocity < 0.24 {
+            continue;
+        }
+        events.push(AiNoteEvent {
+            start_frame: (start_time.max(0.0) * frames_per_second).round() as usize,
+            frames: (duration.max(0.01) * frames_per_second).round().max(1.0) as usize,
+            midi: midi as i32,
+            velocity,
+        });
+    }
+    events.sort_by_key(|event| event.start_frame);
+    Ok(events)
+}
+
+fn ai_lead_score(event: &AiNoteEvent) -> f32 {
+    let register = if event.midi < 48 {
+        -0.45
+    } else if event.midi < 60 {
+        -0.12
+    } else if event.midi <= 84 {
+        0.24
+    } else {
+        0.04
+    };
+    event.velocity + (event.frames as f32 / 64.0).clamp(0.0, 0.55) * 0.16 + register
+}
+
+fn ai_event_to_note(
+    event: &AiNoteEvent,
+    track: &'static str,
+    instrument_id: &'static str,
+    velocity_scale: f32,
+    min_midi: i32,
+    max_midi: i32,
+    context: &MusicalContext,
+) -> NoteEvent {
+    let midi = snap_midi_to_scale(
+        fold_midi_to_range(event.midi, min_midi, max_midi),
+        context.key_root,
+        context.mode,
+        min_midi,
+        max_midi,
+    );
+    NoteEvent {
+        track,
+        start_frame: event.start_frame,
+        frames: event.frames.max(1),
+        midi,
+        hz: midi_to_hz(midi),
+        velocity: (event.velocity * velocity_scale).clamp(0.08, 0.82),
+        instrument_id,
+    }
+}
+
+fn select_ai_best_windows<F>(
+    events: &[AiNoteEvent],
+    window_frames: usize,
+    score: F,
+) -> Vec<AiNoteEvent>
+where
+    F: Fn(&AiNoteEvent) -> f32,
+{
+    let mut out: Vec<AiNoteEvent> = Vec::new();
+    let mut index = 0usize;
+    while index < events.len() {
+        let window_start = events[index].start_frame;
+        let window_end = window_start.saturating_add(window_frames.max(1));
+        let mut best = events[index].clone();
+        index += 1;
+        while index < events.len() && events[index].start_frame <= window_end {
+            if score(&events[index]) > score(&best) {
+                best = events[index].clone();
+            }
+            index += 1;
+        }
+        if let Some(last) = out.last_mut() {
+            let last_end = last.start_frame.saturating_add(last.frames);
+            if best.start_frame < last_end.saturating_add(3) {
+                if best.midi == last.midi {
+                    let new_end = best.start_frame.saturating_add(best.frames).max(last_end);
+                    last.frames = new_end.saturating_sub(last.start_frame).max(1);
+                    last.velocity = last.velocity.max(best.velocity);
+                } else if score(&best) > score(last) + 0.10 {
+                    out.push(best);
+                }
+                continue;
+            }
+        }
+        out.push(best);
+    }
+    out
+}
+
+fn build_ai_melodic_layers(
+    ai_events: &[AiNoteEvent],
+    context: &MusicalContext,
+) -> (
+    Vec<NoteEvent>,
+    Vec<NoteEvent>,
+    Vec<NoteEvent>,
+    Vec<NoteEvent>,
+) {
+    let window = (context.frames_per_beat * 0.18).round().max(5.0) as usize;
+    let lead_events = ai_events
+        .iter()
+        .filter(|event| event.midi >= 45 && event.velocity >= 0.28)
+        .cloned()
+        .collect::<Vec<_>>();
+    let lead = select_ai_best_windows(&lead_events, window, ai_lead_score)
+        .into_iter()
+        .map(|event| {
+            ai_event_to_note(
+                &event,
+                "lead",
+                DEFAULT_LEAD_INSTRUMENT,
+                1.25,
+                55,
+                88,
+                context,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let hook = lead
+        .iter()
+        .enumerate()
+        .filter(|(index, note)| *index % 3 == 0 && note.frames >= 6 && note.velocity >= 0.18)
+        .map(|(_, note)| {
+            let mut hook = note.clone();
+            hook.track = "hook";
+            hook.midi = fold_midi_to_range(hook.midi + 12, 67, 96);
+            hook.hz = midi_to_hz(hook.midi);
+            hook.velocity = (hook.velocity * 0.62).clamp(0.08, 0.42);
+            hook
+        })
+        .collect::<Vec<_>>();
+
+    let counter_events = ai_events
+        .iter()
+        .filter(|event| event.midi >= 72 && event.midi <= 96 && event.velocity >= 0.30)
+        .cloned()
+        .collect::<Vec<_>>();
+    let counter = select_ai_best_windows(&counter_events, window * 2, |event| {
+        event.velocity + (event.midi as f32 - 72.0) * 0.004
+    })
+    .into_iter()
+    .map(|event| {
+        ai_event_to_note(
+            &event,
+            "counter",
+            DEFAULT_LEAD_INSTRUMENT,
+            0.72,
+            60,
+            92,
+            context,
+        )
+    })
+    .collect::<Vec<_>>();
+
+    let pad_events = ai_events
+        .iter()
+        .filter(|event| {
+            event.midi >= 48 && event.midi <= 78 && event.velocity >= 0.28 && event.frames >= 8
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let pad = select_ai_best_windows(&pad_events, window * 3, |event| {
+        event.velocity + (event.frames as f32 / 86.0).clamp(0.0, 0.55)
+    })
+    .into_iter()
+    .map(|event| ai_event_to_note(&event, "pad", DEFAULT_PAD_INSTRUMENT, 0.58, 48, 76, context))
+    .collect::<Vec<_>>();
+
+    (
+        merge_neighbor_notes(lead),
+        merge_neighbor_notes(hook),
+        merge_neighbor_notes(counter),
+        merge_neighbor_notes(pad),
+    )
+}
+
+fn build_runtime_events_with_optional_ai(
+    frames: &[AnalysisFrame],
+    sample_rate: u32,
+    chunks: &[DacChunk],
+    ai_notes_path: &Path,
+) -> Vec<RuntimeEvent> {
+    let (context, bass_notes, deterministic_lead, drum_events) =
+        build_note_preview_data(frames, sample_rate, chunks);
+    let ai_events = read_ai_note_events(ai_notes_path, sample_rate).unwrap_or_default();
+    let (ai_lead, ai_hook, ai_counter, ai_pad) = build_ai_melodic_layers(&ai_events, &context);
+    let use_ai = ai_lead.len() >= 12;
+    let lead_notes = if use_ai { ai_lead } else { deterministic_lead };
+    let pad_notes = if use_ai && ai_pad.len() >= 6 {
+        ai_pad
+    } else {
+        build_spectral_pad_notes(frames, &bass_notes, &lead_notes, &context)
+    };
+    let chord_notes =
+        build_spectral_chord_notes(frames, &bass_notes, &lead_notes, &pad_notes, &context);
+    let counter_notes = if use_ai && ai_counter.len() >= 4 {
+        ai_counter
+    } else {
+        build_spectral_counter_notes(frames, &lead_notes, &context)
+    };
+    let hook_notes = if use_ai && ai_hook.len() >= 4 {
+        ai_hook
+    } else {
+        build_hook_notes(frames, &context)
+    };
+    let psg_lead_notes = build_psg_lead_notes(&hook_notes);
+    let psg_counter_notes = build_psg_counter_notes(&counter_notes);
+    let psg_bass_notes = build_psg_bass_notes(&bass_notes);
+    build_runtime_events_from_render_plan(
+        sample_rate,
+        context.loop_end_frame,
+        &bass_notes,
+        &lead_notes,
+        &pad_notes,
+        &chord_notes,
+        &counter_notes,
+        &psg_lead_notes,
+        &psg_counter_notes,
+        &psg_bass_notes,
+        &drum_events,
+    )
+}
+
 fn write_runtime_binary(path: &Path, sample_rate: u32, events: &[RuntimeEvent]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -3865,6 +4129,16 @@ fn nearest_dac_chunk(frame_index: usize, chunks: &[DacChunk]) -> Option<&DacChun
         .min_by_key(|chunk| frame_index.abs_diff(chunk.start_frame))
 }
 
+fn drum_palette_chunk(frame_index: usize, chunks: &[DacChunk], salt: usize) -> Option<&DacChunk> {
+    nearest_dac_chunk(frame_index, chunks).or_else(|| {
+        if chunks.is_empty() {
+            None
+        } else {
+            chunks.get((frame_index / 17 + salt) % chunks.len())
+        }
+    })
+}
+
 fn build_drum_events(frames: &[AnalysisFrame], chunks: &[DacChunk]) -> Vec<DrumEvent> {
     let mut drums = Vec::new();
     let mut last_frame = 0usize;
@@ -3899,6 +4173,64 @@ fn build_drum_events(frames: &[AnalysisFrame], chunks: &[DacChunk]) -> Vec<DrumE
     drums
 }
 
+fn add_grid_drum_events(
+    mut drums: Vec<DrumEvent>,
+    frames: &[AnalysisFrame],
+    chunks: &[DacChunk],
+    context: &MusicalContext,
+) -> Vec<DrumEvent> {
+    if frames.is_empty() || chunks.is_empty() {
+        return drums;
+    }
+
+    let loop_end = context
+        .loop_end_frame
+        .max(frames.last().map(|frame| frame.index).unwrap_or(0));
+    let beat_frames = context.frames_per_beat.round().max(12.0) as usize;
+    let half_beat_frames = (context.frames_per_beat * 0.5).round().max(6.0) as usize;
+    let bar_frames = beat_frames * 4;
+    let mut cursor = context.grid_offset_frame.min(loop_end);
+
+    while cursor < loop_end {
+        let local = cursor.saturating_sub(context.grid_offset_frame) % bar_frames.max(1);
+        let beat = (local / beat_frames.max(1)).min(3);
+        let offbeat = local % beat_frames.max(1) >= half_beat_frames;
+        let Some(frame) = frames.get(cursor.min(frames.len() - 1)) else {
+            break;
+        };
+        if frame.rms > 0.012 {
+            let (kind, velocity, noise_amp, salt) = if offbeat {
+                ("hat", 0.42 + frame.transient * 0.18, 0.36, 2)
+            } else if beat == 1 || beat == 3 {
+                ("snare", 0.68 + frame.transient * 0.18, 0.58, 1)
+            } else if beat == 2 {
+                ("kick", 0.52 + frame.bass_amp * 0.22, 0.20, 0)
+            } else {
+                ("kick", 0.76 + frame.bass_amp * 0.18, 0.24, 0)
+            };
+            let already_hit = drums.iter().any(|drum| {
+                drum.start_frame.abs_diff(cursor) <= context.grid_frames.max(2) / 2
+                    && drum.velocity >= velocity * 0.85
+            });
+            if !already_hit {
+                let dac = drum_palette_chunk(cursor, chunks, salt);
+                drums.push(DrumEvent {
+                    start_frame: cursor,
+                    kind,
+                    velocity: velocity.clamp(0.18, 0.92),
+                    noise_amp: noise_amp + (frame.noise_amp * 0.18),
+                    instrument_id: DEFAULT_NOISE_INSTRUMENT,
+                    dac_chunk: dac.map(|chunk| chunk.id),
+                    dac_path: dac.map(|chunk| chunk.path.clone()).unwrap_or_default(),
+                });
+            }
+        }
+        cursor = cursor.saturating_add(half_beat_frames.max(1));
+    }
+
+    drums
+}
+
 fn build_note_preview_data(
     frames: &[AnalysisFrame],
     sample_rate: u32,
@@ -3919,7 +4251,10 @@ fn build_note_preview_data(
         &bass_notes,
     );
     let lead_notes = smooth_lead_melody(lead_notes, &context);
-    let drum_events = quantize_drum_events(build_drum_events(frames, chunks), &context);
+    let drum_events = quantize_drum_events(
+        add_grid_drum_events(build_drum_events(frames, chunks), frames, chunks, &context),
+        &context,
+    );
     (context, bass_notes, lead_notes, drum_events)
 }
 
@@ -4310,8 +4645,17 @@ fn analyse_input(
     let imported = import_audio(input, &bundle_dir)?;
     let frames = analyse_samples(&imported.wav);
     let dac_chunks = extract_dac_chunks(&bundle_dir, &imported.wav, &frames)?;
-    let runtime_events =
-        build_render_plan_runtime_events(&frames, imported.wav.sample_rate, &dac_chunks);
+    let ai_notes_path = bundle_dir.join("ai/basic_pitch/ai_notes.vand-ai-notes.json");
+    let runtime_events = if ai_notes_path.exists() {
+        build_runtime_events_with_optional_ai(
+            &frames,
+            imported.wav.sample_rate,
+            &dac_chunks,
+            &ai_notes_path,
+        )
+    } else {
+        build_render_plan_runtime_events(&frames, imported.wav.sample_rate, &dac_chunks)
+    };
     let import_metadata = bundle_dir.join("import.json");
     let note_arrangement = bundle_dir.join("note_arrangement.vand-audio.json");
     let render_plan = bundle_dir.join("render_plan.vand-audio.json");
