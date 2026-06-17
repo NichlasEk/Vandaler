@@ -1,9 +1,13 @@
 source = ""
 output_dir = "audio/converted"
 instrument_bank = ""
+ai_backend = "off"
+ai_home = "/home/nichlas/ai"
+ai_tool_dir = ""
 
 [presets]
 previewPreset = "balanced"
+previewSource = "rust"
 bassGain = "1"
 leadGain = "0.85"
 psgGain = "0.85"

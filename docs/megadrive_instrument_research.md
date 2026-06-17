@@ -52,6 +52,10 @@ The lab owns a neutral JSON schema:
 - `format`: `vandaler-instrument-v0`
 - `chip`: `ym2612`, `sn76489`, or `dac`
 - `category`: `bass`, `lead`, `pad`, `noise`, `drum`, `sfx`, or `uncurated`
+- `role`: provisional playback role such as `bass`, `lead`, `hook`, `pad`,
+  `chord`, `drum`, or `psg`
+- `tags`: searchable traits such as `low`, `aggressive`, `melodic`, `short`,
+  `bright`, `sustained`, `chord`, and `percussive`
 - chip-specific patch data
 - source and license metadata
 
@@ -105,3 +109,11 @@ Status: the JSON exports now carry `instrument_bank` plus per-frame
 track `instrument_id` fields. The SGDK binary/runtime event format still uses
 the old hardcoded voices; the next runtime step is to load these IDs into a
 deterministic YM/PSG patch switcher.
+
+Imported Furnace instruments are now assigned provisional `role` and `tags`
+from folder names, patch names and basic FM parameters. The Tauri previewer uses
+those fields when a requested instrument id is missing or unsuitable for a track,
+so larger temporary banks can be auditioned without hand-picking every event.
+Older curated instruments without these fields still load through defaults; a
+future curation pass should regenerate the committed core bank with explicit
+roles and tags after license review.

@@ -11,6 +11,9 @@ const state = {
   debugHitboxes: [],
   selectedDebugNote: null,
   regionStopTimer: null,
+  aiBackend: "off",
+  aiHome: "/home/nichlas/ai",
+  aiToolDir: "",
   busyCount: 0,
   settingsLoaded: false,
   presets: {
@@ -95,6 +98,7 @@ function applyMixControls(values, preset = "custom") {
   state.presets = {
     ...state.presets,
     previewPreset: preset,
+    previewSource: $("previewSource").value || "rust",
     bassGain: String($("bassGain").value),
     leadGain: String($("leadGain").value),
     psgGain: String($("psgGain").value),
@@ -107,6 +111,9 @@ function currentSettings() {
     source: state.source || "",
     output_dir: state.output || "audio/converted",
     instrument_bank: state.bankPath || "",
+    ai_backend: state.aiBackend || "off",
+    ai_home: state.aiHome || "/home/nichlas/ai",
+    ai_tool_dir: state.aiToolDir || "",
     presets: state.presets || {},
   };
 }
@@ -124,7 +131,12 @@ async function loadSettings() {
   try {
     const settings = await invoke("load_settings");
     state.settingsLoaded = true;
+    state.aiBackend = settings?.ai_backend || "off";
+    state.aiHome = settings?.ai_home || "/home/nichlas/ai";
+    state.aiToolDir = settings?.ai_tool_dir || "";
+    $("aiBackend").value = state.aiBackend;
     state.presets = { ...state.presets, ...(settings?.presets || {}) };
+    $("previewSource").value = state.presets.previewSource || "rust";
     applyMixControls(
       {
         bassGain: Number(state.presets.bassGain || 1),
@@ -159,7 +171,7 @@ async function loadSettings() {
 
 function setSummary(summary) {
   state.summary = summary;
-  for (const id of ["dacPlayer", "arrangementPlayer", "notePlayer", "runtimePlayer"]) {
+  for (const id of ["dacPlayer", "arrangementPlayer", "notePlayer", "aiPlayer", "runtimePlayer"]) {
     $(id).removeAttribute("src");
     $(id).load();
   }
@@ -176,6 +188,7 @@ function setSummary(summary) {
   $("loadDacBtn").disabled = !summary?.dac_preview;
   $("loadArrangementBtn").disabled = !summary?.arrangement;
   $("loadNoteBtn").disabled = !(summary?.render_plan || summary?.note_arrangement);
+  $("loadAiBtn").disabled = !summary?.ai_notes;
   $("loadRuntimeBtn").disabled = !summary?.runtime_preview;
   $("reloadDebugBtn").disabled = !(summary?.arrangement && summary?.render_plan);
 
@@ -195,7 +208,10 @@ function setSummary(summary) {
     ["Import", summary.import_metadata],
     ["DAC Preview", summary.dac_preview],
     ["Runtime Preview", summary.runtime_preview],
+    ["AI Manifest", summary.ai_manifest],
+    ["AI Notes", summary.ai_notes],
   ]) {
+    if (!value) continue;
     const row = document.createElement("div");
     row.textContent = `${label}: ${value}`;
     $("exportList").appendChild(row);
@@ -250,6 +266,7 @@ function trackColor(role) {
     psg_lead: "#fff1a8",
     psg_counter: "#9fe7ff",
     psg_bass: "#ff8fba",
+    ai_basic_pitch: "#65ffd2",
   }[role] || "#d9dfec";
 }
 
@@ -263,8 +280,25 @@ function frameToSeconds(frames, hop, sampleRate) {
   return (frames * hop) / sampleRate;
 }
 
-function collectTrackStats(renderPlan) {
-  return (renderPlan?.tracks || []).map((track) => {
+function aiTracksForRenderPlan(aiNotes, renderPlan) {
+  if (!aiNotes?.tracks?.length || !renderPlan?.sample_rate || !renderPlan?.hop) return [];
+  const framesPerSecond = renderPlan.sample_rate / renderPlan.hop;
+  return aiNotes.tracks.map((track) => ({
+    role: track.role || "ai_basic_pitch",
+    chip: track.chip || "ai",
+    channel: track.channel ?? 0,
+    events: (track.events || []).map((event) => ({
+      ...event,
+      start_frame: Math.round((event.start_time || 0) * framesPerSecond),
+      frames: Math.max(1, Math.round((event.duration || 0.01) * framesPerSecond)),
+      velocity: Number(event.velocity || 0),
+    })),
+  }));
+}
+
+function collectTrackStats(renderPlan, aiNotes = null) {
+  const tracks = [...(renderPlan?.tracks || []), ...aiTracksForRenderPlan(aiNotes, renderPlan)];
+  return tracks.map((track) => {
     const events = track.events || [];
     const activeFrames = events.reduce((sum, event) => sum + (event.frames || 0), 0);
     const avgVelocity = events.length
@@ -282,14 +316,17 @@ function collectTrackStats(renderPlan) {
   });
 }
 
-function drawDebugCanvas(arrangement, renderPlan) {
+function drawDebugCanvas(arrangement, renderPlan, aiNotes = null) {
   const canvas = $("debugCanvas");
   const ctx = canvas.getContext("2d");
   const width = canvas.width;
   const height = canvas.height;
   const frames = arrangement?.events || [];
-  const tracks = collectTrackStats(renderPlan);
-  const totalFrames = Math.max(renderPlan?.total_frames || arrangement?.events?.length || 1, 1);
+  const tracks = collectTrackStats(renderPlan, aiNotes);
+  const aiTotalFrames = aiTracksForRenderPlan(aiNotes, renderPlan)
+    .flatMap((track) => track.events || [])
+    .reduce((max, event) => Math.max(max, (event.start_frame || 0) + (event.frames || 1)), 0);
+  const totalFrames = Math.max(renderPlan?.total_frames || arrangement?.events?.length || 1, aiTotalFrames, 1);
   const topHeight = 88;
   const rowHeight = Math.max(16, Math.floor((height - topHeight - 18) / Math.max(1, tracks.length)));
   const selected = state.selectedDebugNote;
@@ -400,7 +437,7 @@ function setSelectedDebugNote(note) {
     `midi ${note.midi ?? "-"} · ${Math.round(note.hz || 0)}Hz · v${Number(note.velocity || 0).toFixed(2)}`,
     `${start.toFixed(2)}-${end.toFixed(2)}s · ${note.frames || 0} frames`,
   ].join("\n");
-  if (state.debug) drawDebugCanvas(state.debug.arrangement, state.debug.renderPlan);
+  if (state.debug) drawDebugCanvas(state.debug.arrangement, state.debug.renderPlan, state.debug.aiNotes);
 }
 
 function pickDebugNote(event) {
@@ -437,10 +474,10 @@ function hoverDebugNote(event) {
   canvas.title = `${hit.note.role} midi ${hit.note.midi ?? "-"} ${Math.round(hit.note.hz || 0)}Hz`;
 }
 
-function renderTrackSummary(renderPlan) {
+function renderTrackSummary(renderPlan, aiNotes = null) {
   const list = $("trackSummary");
   list.innerHTML = "";
-  for (const track of collectTrackStats(renderPlan)) {
+  for (const track of collectTrackStats(renderPlan, aiNotes)) {
     const card = document.createElement("article");
     const title = document.createElement("strong");
     title.textContent = `${track.role} · ${track.chip}${track.channel}`;
@@ -452,10 +489,10 @@ function renderTrackSummary(renderPlan) {
   }
 }
 
-function renderNoteInspector(renderPlan) {
+function renderNoteInspector(renderPlan, aiNotes = null) {
   const box = $("noteInspector");
   box.innerHTML = "";
-  const notes = (renderPlan?.tracks || [])
+  const notes = [...(renderPlan?.tracks || []), ...aiTracksForRenderPlan(aiNotes, renderPlan)]
     .flatMap((track) =>
       (track.events || []).map((event) => ({
         role: track.role,
@@ -479,19 +516,23 @@ function renderNoteInspector(renderPlan) {
   }
 }
 
-function renderDebugMeta(report, renderPlan) {
-  const tracks = collectTrackStats(renderPlan);
+function renderDebugMeta(report, renderPlan, aiNotes = null) {
+  const tracks = collectTrackStats(renderPlan, aiNotes);
   const fmNotes = tracks
     .filter((track) => track.chip === "ym2612")
     .reduce((sum, track) => sum + track.count, 0);
   const psgNotes = tracks
     .filter((track) => track.chip === "psg")
     .reduce((sum, track) => sum + track.count, 0);
+  const aiNoteCount = tracks
+    .filter((track) => track.chip === "ai")
+    .reduce((sum, track) => sum + track.count, 0);
   $("debugMeta").innerHTML = [
     ["Grid", report?.grid_frames ?? renderPlan?.tempo?.grid_frames ?? "-"],
     ["Offset", report?.grid_offset_frame ?? renderPlan?.tempo?.grid_offset_frame ?? "-"],
     ["FM Notes", fmNotes],
     ["PSG Notes", psgNotes],
+    ["AI Notes", aiNoteCount || "-"],
   ]
     .map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`)
     .join("");
@@ -504,17 +545,18 @@ async function loadDebug() {
   }
   $("reloadDebugBtn").disabled = true;
   try {
-    const [arrangement, renderPlan, report] = await Promise.all([
+    const [arrangement, renderPlan, report, aiNotes] = await Promise.all([
       readJson(state.summary.arrangement),
       readJson(state.summary.render_plan),
       readJson(state.summary.preview_report).catch(() => null),
+      state.summary.ai_notes ? readJson(state.summary.ai_notes).catch(() => null) : Promise.resolve(null),
     ]);
-    state.debug = { arrangement, renderPlan, report };
+    state.debug = { arrangement, renderPlan, report, aiNotes };
     state.selectedDebugNote = null;
-    renderDebugMeta(report, renderPlan);
-    drawDebugCanvas(arrangement, renderPlan);
-    renderTrackSummary(renderPlan);
-    renderNoteInspector(renderPlan);
+    renderDebugMeta(report, renderPlan, aiNotes);
+    drawDebugCanvas(arrangement, renderPlan, aiNotes);
+    renderTrackSummary(renderPlan, aiNotes);
+    renderNoteInspector(renderPlan, aiNotes);
     enableRegionButtons(true);
   } catch (err) {
     clearDebug("Debug load failed.");
@@ -664,6 +706,9 @@ async function analyse() {
     const result = await invoke("analyse_audio", {
       input: state.source,
       outputDir: state.output,
+      aiBackend: state.aiBackend || "off",
+      aiHome: state.aiHome || "/home/nichlas/ai",
+      aiToolDir: state.aiToolDir || "",
     });
     setSummary(result.summary);
     setLog(result.log || "Analysis complete.");
@@ -818,22 +863,62 @@ async function loadNote() {
   const previewPath = state.summary?.render_plan || state.summary?.note_arrangement;
   if (!previewPath) return;
   const player = $("notePlayer");
+  const source = $("previewSource").value || "rust";
   setBusy("noteProgress", "loadNoteBtn", true, "Rendering...");
-  setLog(`Rendering note preview...\n${previewPath}`);
+  setLog(`Rendering ${source} note preview...\n${previewPath}`);
   try {
     await paint();
-    player.src = await invoke("note_preview_data_url", {
-      path: previewPath,
-      bankPath: state.bankPath || "",
-      ...readMixControls(),
-    });
+    if (source === "ai") {
+      if (!state.summary?.ai_notes) throw new Error("No AI notes available.");
+      player.src = await invoke("ai_note_preview_data_url", {
+        path: state.summary.ai_notes,
+        bankPath: state.bankPath || "",
+        leadGain: Number($("leadGain").value),
+      });
+    } else if (source === "hybrid") {
+      if (!state.summary?.ai_notes) throw new Error("No AI notes available.");
+      player.src = await invoke("hybrid_note_preview_data_url", {
+        path: previewPath,
+        aiPath: state.summary.ai_notes,
+        bankPath: state.bankPath || "",
+        ...readMixControls(),
+      });
+    } else {
+      player.src = await invoke("note_preview_data_url", {
+        path: previewPath,
+        bankPath: state.bankPath || "",
+        ...readMixControls(),
+      });
+    }
     await player.play();
-    setLog(`Playing note preview:\n${previewPath}`);
+    setLog(`Playing ${source} note preview:\n${previewPath}`);
   } catch (err) {
     setLog(`Note preview failed:\n${err}`);
   } finally {
     setBusy("noteProgress", "loadNoteBtn", false);
     $("loadNoteBtn").disabled = !(state.summary?.render_plan || state.summary?.note_arrangement);
+  }
+}
+
+async function loadAi() {
+  if (!state.summary?.ai_notes) return;
+  const player = $("aiPlayer");
+  setBusy("aiProgress", "loadAiBtn", true, "Rendering...");
+  setLog(`Rendering AI preview...\n${state.summary.ai_notes}`);
+  try {
+    await paint();
+    player.src = await invoke("ai_note_preview_data_url", {
+      path: state.summary.ai_notes,
+      bankPath: state.bankPath || "",
+      leadGain: Number($("leadGain").value),
+    });
+    await player.play();
+    setLog(`Playing AI preview:\n${state.summary.ai_notes}`);
+  } catch (err) {
+    setLog(`AI preview failed:\n${err}`);
+  } finally {
+    setBusy("aiProgress", "loadAiBtn", false);
+    $("loadAiBtn").disabled = !state.summary?.ai_notes;
   }
 }
 
@@ -847,6 +932,7 @@ $("loadDacBtn").addEventListener("click", loadDac);
 $("loadRuntimeBtn").addEventListener("click", loadRuntime);
 $("loadArrangementBtn").addEventListener("click", loadArrangement);
 $("loadNoteBtn").addEventListener("click", loadNote);
+$("loadAiBtn").addEventListener("click", loadAi);
 $("previewInstrumentBtn").addEventListener("click", previewInstrument);
 $("reloadDebugBtn").addEventListener("click", loadDebug);
 $("debugCanvas").addEventListener("click", pickDebugNote);
@@ -854,12 +940,22 @@ $("debugCanvas").addEventListener("mousemove", hoverDebugNote);
 $("playOriginalRegionBtn").addEventListener("click", playOriginalRegion);
 $("playPreviewRegionBtn").addEventListener("click", playPreviewRegion);
 $("playBothRegionBtn").addEventListener("click", playBothRegion);
+$("aiBackend").addEventListener("change", async () => {
+  state.aiBackend = $("aiBackend").value || "off";
+  await saveSettings();
+});
 $("previewPreset").addEventListener("change", async () => {
   const preset = $("previewPreset").value;
   if (presetValues[preset]) {
     applyMixControls(presetValues[preset], preset);
     await saveSettings();
   }
+});
+$("previewSource").addEventListener("change", async () => {
+  state.presets.previewSource = $("previewSource").value || "rust";
+  $("notePlayer").removeAttribute("src");
+  $("notePlayer").load();
+  await saveSettings();
 });
 for (const id of ["bassGain", "leadGain", "psgGain", "dacGain"]) {
   $(id).addEventListener("input", () => {

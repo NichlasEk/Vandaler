@@ -6,6 +6,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_INSTRUMENT_BANK: &str =
     "audio/instruments/vand_furnace_core/bank.vand-instruments.json";
@@ -41,6 +42,12 @@ struct AudioLabSettings {
     output_dir: String,
     #[serde(default)]
     instrument_bank: String,
+    #[serde(default = "default_ai_backend")]
+    ai_backend: String,
+    #[serde(default = "default_ai_home")]
+    ai_home: String,
+    #[serde(default)]
+    ai_tool_dir: String,
     #[serde(default)]
     presets: HashMap<String, String>,
 }
@@ -51,6 +58,9 @@ impl Default for AudioLabSettings {
             source: String::new(),
             output_dir: default_output_dir(),
             instrument_bank: String::new(),
+            ai_backend: default_ai_backend(),
+            ai_home: default_ai_home(),
+            ai_tool_dir: String::new(),
             presets: HashMap::new(),
         }
     }
@@ -58,6 +68,14 @@ impl Default for AudioLabSettings {
 
 fn default_output_dir() -> String {
     "audio/converted".to_string()
+}
+
+fn default_ai_backend() -> String {
+    "off".to_string()
+}
+
+fn default_ai_home() -> String {
+    "/home/nichlas/ai".to_string()
 }
 
 fn set_default_env(key: &str, value: &str) {
@@ -99,6 +117,8 @@ struct AnalysisSummary {
     import_metadata: String,
     dac_preview: String,
     runtime_preview: String,
+    ai_manifest: String,
+    ai_notes: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -143,6 +163,10 @@ struct InstrumentBankEntry {
     name: String,
     chip: String,
     category: String,
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    tags: Vec<String>,
     source: String,
     file: String,
 }
@@ -159,6 +183,10 @@ struct VandInstrument {
     name: String,
     chip: String,
     category: String,
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    tags: Vec<String>,
     fm: Option<VandFmPatch>,
 }
 
@@ -294,6 +322,32 @@ struct VandRenderDrum {
     dac_chunk: Option<usize>,
     #[serde(default)]
     dac_path: String,
+}
+
+#[derive(Deserialize)]
+struct VandAiNotes {
+    #[serde(default = "default_sample_rate")]
+    sample_rate: u32,
+    #[serde(default = "default_arrangement_hop")]
+    hop: usize,
+    #[serde(default)]
+    total_seconds: f32,
+    tracks: Vec<VandAiNoteTrack>,
+}
+
+#[derive(Deserialize)]
+struct VandAiNoteTrack {
+    role: String,
+    events: Vec<VandAiNoteEvent>,
+}
+
+#[derive(Clone, Deserialize)]
+struct VandAiNoteEvent {
+    start_time: f32,
+    duration: f32,
+    hz: f32,
+    midi: i32,
+    velocity: f32,
 }
 
 fn default_sample_rate() -> u32 {
@@ -437,6 +491,91 @@ fn read_instrument(path: &Path) -> Result<VandInstrument, String> {
     let text = fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     serde_json::from_str(&text).map_err(|err| format!("invalid instrument JSON: {err}"))
+}
+
+fn role_matches(track: &str, role: &str) -> bool {
+    match track {
+        "bass" => matches!(role, "bass"),
+        "pad" => matches!(role, "pad" | "chord"),
+        "chord" => matches!(role, "chord" | "pad" | "keys"),
+        "counter" | "hook" | "lead" => matches!(role, "lead" | "hook"),
+        _ => false,
+    }
+}
+
+fn choose_fm_instrument_id(
+    instruments: &HashMap<String, VandInstrument>,
+    requested: &str,
+    track: &str,
+    fallback: &str,
+) -> String {
+    if !requested.is_empty()
+        && instruments
+            .get(requested)
+            .is_some_and(|instrument| instrument.fm.is_some())
+    {
+        return requested.to_string();
+    }
+    if instruments
+        .get(fallback)
+        .is_some_and(|instrument| instrument.fm.is_some())
+    {
+        return fallback.to_string();
+    }
+
+    let mut best: Option<(&str, i32)> = None;
+    for (id, instrument) in instruments {
+        if instrument.chip != "ym2612" || instrument.fm.is_none() {
+            continue;
+        }
+        let role = if instrument.role.is_empty() {
+            instrument.category.as_str()
+        } else {
+            instrument.role.as_str()
+        };
+        let mut score = 0;
+        if role_matches(track, role) {
+            score += 80;
+        }
+        if role_matches(track, &instrument.category) {
+            score += 40;
+        }
+        for tag in &instrument.tags {
+            if role_matches(track, tag) {
+                score += 28;
+            }
+            if track == "bass" && matches!(tag.as_str(), "low" | "aggressive") {
+                score += 12;
+            }
+            if matches!(track, "lead" | "hook" | "counter")
+                && matches!(tag.as_str(), "melodic" | "bright" | "short")
+            {
+                score += 12;
+            }
+            if matches!(track, "pad" | "chord") && matches!(tag.as_str(), "sustained" | "chord") {
+                score += 12;
+            }
+        }
+        let name = instrument.name.to_ascii_lowercase();
+        if track == "bass" && (name.contains("bass") || name.contains("sub")) {
+            score += 14;
+        }
+        if matches!(track, "lead" | "hook") && (name.contains("lead") || name.contains("pluck")) {
+            score += 14;
+        }
+        if matches!(track, "pad" | "chord") && (name.contains("pad") || name.contains("string")) {
+            score += 14;
+        }
+        if score == 0 {
+            score = 1;
+        }
+        if best.is_none_or(|(_, best_score)| score > best_score) {
+            best = Some((id.as_str(), score));
+        }
+    }
+
+    best.map(|(id, _)| id.to_string())
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn write_fm_patch(audio: &mut Audio, instrument: &VandInstrument, channel: usize, attenuation: u8) {
@@ -756,6 +895,396 @@ fn render_plan_to_note_arrangement(plan: &VandRenderPlan) -> VandNoteArrangement
     }
 }
 
+fn ai_notes_to_note_arrangement(ai: &VandAiNotes, instrument_bank: String) -> VandNoteArrangement {
+    let frames_per_second = ai.sample_rate as f32 / ai.hop.max(1) as f32;
+    let notes = select_ai_role_notes(ai)
+        .into_iter()
+        .map(|(track, event)| ai_event_to_note_event(track, event, frames_per_second))
+        .collect::<Vec<_>>();
+    let inferred_frames = notes
+        .iter()
+        .map(|note| note.start_frame.saturating_add(note.frames))
+        .max()
+        .unwrap_or(0);
+    let total_frames = ((ai.total_seconds.max(0.0) * frames_per_second).round() as usize)
+        .max(inferred_frames)
+        .max(1);
+    VandNoteArrangement {
+        sample_rate: ai.sample_rate,
+        hop: ai.hop,
+        total_frames,
+        instrument_bank,
+        notes,
+        drums: synthesize_ai_drum_events(ai, total_frames, frames_per_second),
+    }
+}
+
+fn make_psg_drum(start_frame: usize, velocity: f32, noise_amp: f32) -> VandDrumEvent {
+    VandDrumEvent {
+        start_frame,
+        velocity: velocity.clamp(0.0, 1.0),
+        noise_amp: noise_amp.clamp(0.0, 1.0),
+        instrument_id: DEFAULT_NOISE_INSTRUMENT.to_string(),
+        dac_chunk: None,
+        dac_path: String::new(),
+    }
+}
+
+fn push_or_merge_drum(drums: &mut Vec<VandDrumEvent>, drum: VandDrumEvent, merge_window: usize) {
+    if let Some(existing) = drums
+        .iter_mut()
+        .find(|existing| existing.start_frame.abs_diff(drum.start_frame) <= merge_window)
+    {
+        existing.velocity = existing.velocity.max(drum.velocity);
+        existing.noise_amp = existing.noise_amp.max(drum.noise_amp);
+        return;
+    }
+    drums.push(drum);
+}
+
+fn synthesize_ai_drum_events(
+    ai: &VandAiNotes,
+    total_frames: usize,
+    frames_per_second: f32,
+) -> Vec<VandDrumEvent> {
+    if total_frames == 0 || frames_per_second <= 0.0 {
+        return Vec::new();
+    }
+    let step = (frames_per_second * 0.125).round().max(1.0) as usize;
+    let beat = (frames_per_second * 0.50).round().max(step as f32) as usize;
+    let merge_window = (frames_per_second * 0.045).round().max(1.0) as usize;
+    let mut drums = Vec::new();
+
+    for frame in (0..=total_frames).step_by(step) {
+        let beat_pos = if beat > 0 { frame % beat } else { 0 };
+        let velocity = if beat_pos <= merge_window { 0.36 } else { 0.20 };
+        push_or_merge_drum(
+            &mut drums,
+            make_psg_drum(frame.min(total_frames), velocity, velocity * 0.72),
+            merge_window,
+        );
+    }
+
+    let two_beats = beat.saturating_mul(2).max(1);
+    let four_beats = beat.saturating_mul(4).max(two_beats);
+    for frame in (beat..=total_frames).step_by(two_beats) {
+        let backbeat = if frame % four_beats == beat {
+            0.74
+        } else {
+            0.64
+        };
+        push_or_merge_drum(
+            &mut drums,
+            make_psg_drum(frame, backbeat, backbeat * 0.88),
+            merge_window,
+        );
+    }
+
+    for event in flatten_ai_events(ai) {
+        if event.midi <= 55 && event.velocity >= 0.30 {
+            let frame = (event.start_time.max(0.0) * frames_per_second).round() as usize;
+            push_or_merge_drum(
+                &mut drums,
+                make_psg_drum(frame.min(total_frames), 0.68 + event.velocity * 0.22, 0.32),
+                merge_window,
+            );
+        } else if event.velocity >= 0.62 && event.duration <= 0.18 {
+            let frame = (event.start_time.max(0.0) * frames_per_second).round() as usize;
+            push_or_merge_drum(
+                &mut drums,
+                make_psg_drum(frame.min(total_frames), 0.45 + event.velocity * 0.22, 0.50),
+                merge_window,
+            );
+        }
+    }
+
+    drums.sort_by_key(|drum| drum.start_frame);
+    drums
+}
+
+fn add_dense_psg_drums(arrangement: &mut VandNoteArrangement) {
+    let frames_per_second = arrangement.sample_rate as f32 / arrangement.hop.max(1) as f32;
+    if arrangement.total_frames == 0 || frames_per_second <= 0.0 {
+        return;
+    }
+    let step = (frames_per_second * 0.125).round().max(1.0) as usize;
+    let beat = (frames_per_second * 0.50).round().max(step as f32) as usize;
+    let merge_window = (frames_per_second * 0.040).round().max(1.0) as usize;
+    for frame in (0..=arrangement.total_frames).step_by(step) {
+        let velocity = if frame % beat <= merge_window {
+            0.34
+        } else {
+            0.18
+        };
+        push_or_merge_drum(
+            &mut arrangement.drums,
+            make_psg_drum(frame, velocity, velocity * 0.72),
+            merge_window,
+        );
+    }
+    for frame in (beat..=arrangement.total_frames).step_by(beat.saturating_mul(2).max(1)) {
+        push_or_merge_drum(
+            &mut arrangement.drums,
+            make_psg_drum(frame, 0.72, 0.66),
+            merge_window,
+        );
+    }
+    arrangement.drums.sort_by_key(|drum| drum.start_frame);
+}
+
+fn ai_event_to_note_event(
+    track: &'static str,
+    event: VandAiNoteEvent,
+    frames_per_second: f32,
+) -> VandNoteEvent {
+    let hz = if event.hz > 0.0 {
+        event.hz
+    } else {
+        midi_to_hz(event.midi)
+    };
+    let instrument_id = match track {
+        "bass" => DEFAULT_BASS_INSTRUMENT,
+        "pad" | "chord" => DEFAULT_PAD_INSTRUMENT,
+        _ => DEFAULT_LEAD_INSTRUMENT,
+    };
+    let velocity = match track {
+        "pad" => event.velocity * 0.62,
+        "chord" => event.velocity * 0.52,
+        "counter" => event.velocity * 0.70,
+        _ => event.velocity,
+    };
+    VandNoteEvent {
+        track: track.to_string(),
+        start_frame: (event.start_time.max(0.0) * frames_per_second).round() as usize,
+        frames: (event.duration.max(0.01) * frames_per_second)
+            .round()
+            .max(1.0) as usize,
+        hz,
+        velocity: velocity.clamp(0.0, 1.0),
+        instrument_id: instrument_id.to_string(),
+    }
+}
+
+fn ai_lead_score(event: &VandAiNoteEvent) -> f32 {
+    let register = if event.midi < 48 {
+        -0.45
+    } else if event.midi < 60 {
+        -0.12
+    } else if event.midi <= 84 {
+        0.22
+    } else {
+        0.04
+    };
+    let duration_bonus = event.duration.clamp(0.04, 0.60) * 0.22;
+    event.velocity.clamp(0.0, 1.0) + register + duration_bonus
+}
+
+fn flatten_ai_events(ai: &VandAiNotes) -> Vec<VandAiNoteEvent> {
+    let mut events = ai
+        .tracks
+        .iter()
+        .flat_map(|track| {
+            let _track_role = track.role.as_str();
+            track.events.iter()
+        })
+        .filter(|event| event.duration >= 0.045 && event.velocity >= 0.24)
+        .cloned()
+        .collect::<Vec<_>>();
+    events.sort_by(|a, b| {
+        a.start_time
+            .partial_cmp(&b.start_time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    events
+}
+
+fn select_best_in_windows<F>(
+    events: &[VandAiNoteEvent],
+    window_seconds: f32,
+    score: F,
+) -> Vec<VandAiNoteEvent>
+where
+    F: Fn(&VandAiNoteEvent) -> f32,
+{
+    let mut out: Vec<VandAiNoteEvent> = Vec::new();
+    let mut index = 0usize;
+    while index < events.len() {
+        let window_start = events[index].start_time;
+        let window_end = window_start + window_seconds;
+        let mut best = events[index].clone();
+        index += 1;
+        while index < events.len() && events[index].start_time <= window_end {
+            if score(&events[index]) > score(&best) {
+                best = events[index].clone();
+            }
+            index += 1;
+        }
+        if let Some(last) = out.last_mut() {
+            let last_end = last.start_time + last.duration;
+            if best.start_time < last_end + 0.035 {
+                if best.midi == last.midi {
+                    let new_end = (best.start_time + best.duration).max(last_end);
+                    last.duration = new_end - last.start_time;
+                    last.velocity = last.velocity.max(best.velocity);
+                } else if score(&best) > score(last) + 0.10 {
+                    out.push(best);
+                }
+                continue;
+            }
+        }
+        out.push(best);
+    }
+
+    out
+}
+
+fn select_ai_lead_notes(ai: &VandAiNotes) -> Vec<VandAiNoteEvent> {
+    let events = flatten_ai_events(ai)
+        .into_iter()
+        .filter(|event| event.midi >= 45)
+        .collect::<Vec<_>>();
+    select_best_in_windows(&events, 0.085, ai_lead_score)
+}
+
+fn select_ai_bass_notes(ai: &VandAiNotes) -> Vec<VandAiNoteEvent> {
+    let events = flatten_ai_events(ai)
+        .into_iter()
+        .filter(|event| event.midi >= 28 && event.midi <= 55 && event.velocity >= 0.30)
+        .collect::<Vec<_>>();
+    select_best_in_windows(&events, 0.14, |event| {
+        event.velocity + event.duration.clamp(0.05, 0.80) * 0.24
+            - (event.midi as f32 - 36.0).abs() * 0.006
+    })
+}
+
+fn select_ai_counter_notes(
+    ai: &VandAiNotes,
+    lead_notes: &[VandAiNoteEvent],
+) -> Vec<VandAiNoteEvent> {
+    let events = flatten_ai_events(ai)
+        .into_iter()
+        .filter(|event| event.midi >= 72 && event.midi <= 96 && event.velocity >= 0.28)
+        .filter(|event| {
+            !lead_notes.iter().any(|lead| {
+                let overlap_start = event.start_time.max(lead.start_time);
+                let overlap_end =
+                    (event.start_time + event.duration).min(lead.start_time + lead.duration);
+                overlap_end > overlap_start && (event.midi - lead.midi).abs() < 7
+            })
+        })
+        .collect::<Vec<_>>();
+    select_best_in_windows(&events, 0.16, |event| {
+        event.velocity
+            + event.duration.clamp(0.04, 0.45) * 0.14
+            + (event.midi as f32 - 72.0) * 0.004
+    })
+}
+
+fn overlaps_ai_note(event: &VandAiNoteEvent, other: &VandAiNoteEvent) -> bool {
+    let overlap_start = event.start_time.max(other.start_time);
+    let overlap_end = (event.start_time + event.duration).min(other.start_time + other.duration);
+    overlap_end > overlap_start
+}
+
+fn select_ai_harmony_notes(
+    ai: &VandAiNotes,
+    lead_notes: &[VandAiNoteEvent],
+) -> Vec<(&'static str, VandAiNoteEvent)> {
+    let events = flatten_ai_events(ai)
+        .into_iter()
+        .filter(|event| {
+            event.midi >= 48
+                && event.midi <= 78
+                && event.velocity >= 0.26
+                && event.duration >= 0.10
+                && !lead_notes
+                    .iter()
+                    .any(|lead| overlaps_ai_note(event, lead) && (event.midi - lead.midi).abs() < 3)
+        })
+        .collect::<Vec<_>>();
+    let mut out = Vec::new();
+    let mut index = 0usize;
+    while index < events.len() {
+        let window_start = events[index].start_time;
+        let window_end = window_start + 0.30;
+        let mut window = Vec::new();
+        while index < events.len() && events[index].start_time <= window_end {
+            window.push(events[index].clone());
+            index += 1;
+        }
+        window.sort_by(|a, b| {
+            let score_a = a.velocity + a.duration.clamp(0.10, 0.85) * 0.34;
+            let score_b = b.velocity + b.duration.clamp(0.10, 0.85) * 0.34;
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut selected = Vec::new();
+        for event in window {
+            if selected.iter().any(|other: &VandAiNoteEvent| {
+                (event.midi - other.midi).abs() < 4 || (event.midi - other.midi).abs() > 19
+            }) {
+                continue;
+            }
+            let mut event = event;
+            event.start_time = window_start;
+            event.duration = event.duration.clamp(0.18, 0.70);
+            selected.push(event);
+            if selected.len() == 2 {
+                break;
+            }
+        }
+        selected.sort_by_key(|event| event.midi);
+        if selected.len() == 2 {
+            out.push(("pad", selected[0].clone()));
+            out.push(("chord", selected[1].clone()));
+        } else if selected.len() == 1 && selected[0].duration >= 0.22 {
+            out.push(("pad", selected[0].clone()));
+        }
+    }
+    out
+}
+
+fn select_ai_role_notes(ai: &VandAiNotes) -> Vec<(&'static str, VandAiNoteEvent)> {
+    let lead = select_ai_lead_notes(ai);
+    let bass = select_ai_bass_notes(ai);
+    let counter = select_ai_counter_notes(ai, &lead);
+    let harmony = select_ai_harmony_notes(ai, &lead);
+    let mut out = Vec::with_capacity(lead.len() + bass.len() + counter.len() + harmony.len());
+    out.extend(bass.into_iter().map(|event| ("bass", event)));
+    out.extend(harmony);
+    out.extend(lead.into_iter().map(|event| ("lead", event)));
+    out.extend(counter.into_iter().map(|event| ("counter", event)));
+    out.sort_by(|a, b| {
+        a.1.start_time
+            .partial_cmp(&b.1.start_time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
+}
+
+fn merge_hybrid_note_arrangement(
+    mut base: VandNoteArrangement,
+    ai: &VandAiNotes,
+    instrument_bank: String,
+) -> VandNoteArrangement {
+    let mut ai_arrangement = ai_notes_to_note_arrangement(ai, instrument_bank.clone());
+    ai_arrangement.notes.retain(|note| note.track != "bass");
+    base.instrument_bank = instrument_bank;
+    base.notes.retain(|note| {
+        !matches!(
+            note.track.as_str(),
+            "lead" | "hook" | "counter" | "psg_lead" | "psg_counter"
+        )
+    });
+    base.notes.extend(ai_arrangement.notes);
+    base.drums.extend(ai_arrangement.drums);
+    add_dense_psg_drums(&mut base);
+    base.total_frames = base.total_frames.max(ai_arrangement.total_frames);
+    base
+}
+
 fn frame_sample_count(source_rate: u32, hop: usize) -> usize {
     const RATE: u32 = 44_100;
     ((hop as u64 * RATE as u64 + (source_rate / 2) as u64) / source_rate.max(1) as u64).max(64)
@@ -789,8 +1318,10 @@ fn render_arrangement_samples(
             } else {
                 &frame.bass_instrument_id
             };
-            if bass_id != next_bass_id {
-                bass_id = next_bass_id.to_string();
+            let selected_bass_id =
+                choose_fm_instrument_id(instruments, next_bass_id, "bass", DEFAULT_BASS_INSTRUMENT);
+            if bass_id != selected_bass_id {
+                bass_id = selected_bass_id;
                 if let Some(instrument) = instruments.get(&bass_id) {
                     write_fm_patch(&mut audio, instrument, 0, 0);
                 }
@@ -812,8 +1343,10 @@ fn render_arrangement_samples(
             } else {
                 &frame.lead_instrument_id
             };
-            if lead_id != next_lead_id {
-                lead_id = next_lead_id.to_string();
+            let selected_lead_id =
+                choose_fm_instrument_id(instruments, next_lead_id, "lead", DEFAULT_LEAD_INSTRUMENT);
+            if lead_id != selected_lead_id {
+                lead_id = selected_lead_id;
                 if let Some(instrument) = instruments.get(&lead_id) {
                     write_fm_patch(&mut audio, instrument, 1, 0);
                 }
@@ -893,17 +1426,20 @@ fn render_note_arrangement_samples(
     let mut pad_id = String::new();
     let mut chord_id = String::new();
     let mut counter_id = String::new();
+    let mut hook_id = String::new();
     let mut bass_end = 0usize;
     let mut lead_end = 0usize;
     let mut pad_end = 0usize;
     let mut chord_end = 0usize;
     let mut counter_end = 0usize;
+    let mut hook_end = 0usize;
     let mut psg_end = [0usize; 3];
     let mut bass_on = false;
     let mut lead_on = false;
     let mut pad_on = false;
     let mut chord_on = false;
     let mut counter_on = false;
+    let mut hook_on = false;
     let mut psg_on = [false; 3];
     let mut noise_until = 0usize;
     let mut noise_amp = 0.0f32;
@@ -964,6 +1500,14 @@ fn render_note_arrangement_samples(
                     &mut counter_end,
                     DEFAULT_LEAD_INSTRUMENT,
                 )
+            } else if note.track == "hook" {
+                (
+                    5usize,
+                    &mut hook_id,
+                    &mut hook_on,
+                    &mut hook_end,
+                    DEFAULT_LEAD_INSTRUMENT,
+                )
             } else {
                 (
                     1usize,
@@ -978,8 +1522,9 @@ fn render_note_arrangement_samples(
             } else {
                 &note.instrument_id
             };
-            if current_id.as_str() != next_id {
-                *current_id = next_id.to_string();
+            let selected_id = choose_fm_instrument_id(instruments, next_id, &note.track, fallback);
+            if current_id.as_str() != selected_id {
+                *current_id = selected_id;
                 if *active {
                     fm_key_on(&mut audio, channel, false);
                     *active = false;
@@ -998,6 +1543,8 @@ fn render_note_arrangement_samples(
                     mix.lead_gain * 0.58
                 } else if note.track == "counter" {
                     mix.lead_gain * 0.52
+                } else if note.track == "hook" {
+                    mix.lead_gain * 0.78
                 } else {
                     mix.lead_gain
                 };
@@ -1032,6 +1579,10 @@ fn render_note_arrangement_samples(
             fm_key_on(&mut audio, 4, false);
             counter_on = false;
         }
+        if hook_on && frame >= hook_end {
+            fm_key_on(&mut audio, 5, false);
+            hook_on = false;
+        }
         for channel in 0..3 {
             if psg_on[channel] && frame >= psg_end[channel] {
                 psg_latch_volume(&mut audio, channel as u8, 15);
@@ -1047,8 +1598,13 @@ fn render_note_arrangement_samples(
                 &drum.instrument_id
             };
             if instruments.contains_key(id) {
-                noise_amp =
-                    (drum.noise_amp.max(drum.velocity * 0.65) * mix.psg_gain).clamp(0.0, 1.0);
+                let noise_scale = if drum.dac_chunk.is_some() || !drum.dac_path.is_empty() {
+                    0.40
+                } else {
+                    0.14
+                };
+                noise_amp = (drum.noise_amp.max(drum.velocity * 0.65) * mix.psg_gain * noise_scale)
+                    .clamp(0.0, 1.0);
                 noise_until = frame.saturating_add(3);
             }
             drum_index += 1;
@@ -1088,7 +1644,14 @@ fn mix_dac_drums(
     let mut cache: HashMap<String, Vec<u8>> = HashMap::new();
 
     for drum in drums {
+        let start = drum.start_frame.saturating_mul(frame_samples);
+        if start >= out.len() {
+            continue;
+        }
+        let gain =
+            drum.velocity.max(drum.noise_amp).clamp(0.0, 1.0) * dac_gain.clamp(0.0, 2.0) * 0.55;
         if drum.dac_chunk.is_none() || drum.dac_path.is_empty() {
+            mix_synthetic_preview_drum(out, start, drum, gain);
             continue;
         }
         let bytes = if let Some(bytes) = cache.get(&drum.dac_path) {
@@ -1096,21 +1659,17 @@ fn mix_dac_drums(
         } else {
             let path = resolve_existing_path(Path::new(""), arrangement_dir, &drum.dac_path);
             let Ok(bytes) = fs::read(path) else {
+                mix_synthetic_preview_drum(out, start, drum, gain);
                 continue;
             };
             cache.insert(drum.dac_path.clone(), bytes);
             cache.get(&drum.dac_path).unwrap()
         };
         if bytes.is_empty() {
+            mix_synthetic_preview_drum(out, start, drum, gain);
             continue;
         }
 
-        let start = drum.start_frame.saturating_mul(frame_samples);
-        if start >= out.len() {
-            continue;
-        }
-        let gain =
-            drum.velocity.max(drum.noise_amp).clamp(0.0, 1.0) * dac_gain.clamp(0.0, 2.0) * 0.55;
         let preview_len = ((bytes.len() as u64 * PREVIEW_RATE as u64 + (DAC_RATE / 2) as u64)
             / DAC_RATE as u64)
             .max(1) as usize;
@@ -1128,6 +1687,53 @@ fn mix_dac_drums(
     }
 }
 
+fn mix_synthetic_preview_drum(out: &mut [i16], start: usize, drum: &VandDrumEvent, gain: f32) {
+    const PREVIEW_RATE: usize = 44_100;
+    if start >= out.len() || gain <= 0.0 {
+        return;
+    }
+
+    let is_kick = drum.velocity >= 0.62 && drum.noise_amp < drum.velocity * 0.62;
+    let is_snare = drum.velocity >= 0.58 && drum.noise_amp >= drum.velocity * 0.58;
+    let len = if is_kick {
+        PREVIEW_RATE * 15 / 100
+    } else if is_snare {
+        PREVIEW_RATE * 10 / 100
+    } else {
+        PREVIEW_RATE * 4 / 100
+    };
+    let mut noise_state = 0x9E37_79B9u32 ^ drum.start_frame as u32;
+    let amp = drum.velocity.max(drum.noise_amp).clamp(0.0, 1.0) * gain.clamp(0.0, 2.0);
+
+    for i in 0..len {
+        let out_index = start + i;
+        if out_index >= out.len() {
+            break;
+        }
+        let t = i as f32 / PREVIEW_RATE as f32;
+        let progress = i as f32 / len.max(1) as f32;
+        let env = (1.0 - progress)
+            .max(0.0)
+            .powf(if is_kick { 2.6 } else { 3.8 });
+        noise_state = noise_state
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223);
+        let noise = ((noise_state >> 16) as f32 / 32768.0) - 1.0;
+        let sample = if is_kick {
+            let sweep_hz = 112.0 - progress * 70.0;
+            (std::f32::consts::TAU * sweep_hz * t).sin() * env * 1.15 + noise * env * 0.10
+        } else if is_snare {
+            let body = (std::f32::consts::TAU * 185.0 * t).sin() * env * 0.34;
+            body + noise * env * 0.78
+        } else {
+            noise * env * 0.36
+        };
+        let sample = (sample * amp * 32767.0).round() as i32;
+        let mixed = i32::from(out[out_index]) + sample;
+        out[out_index] = mixed.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    }
+}
+
 fn parse_metric(log: &str, label: &str) -> u32 {
     let Some(index) = log.find(label) else {
         return 0;
@@ -1137,6 +1743,361 @@ fn parse_metric(log: &str, label: &str) -> u32 {
         .last()
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(0)
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+fn ai_cache_env(command: &mut Command, ai_home: &Path) {
+    command
+        .env("XDG_CACHE_HOME", ai_home.join("cache"))
+        .env("HF_HOME", ai_home.join("huggingface"))
+        .env("TORCH_HOME", ai_home.join("torch"));
+}
+
+fn find_ai_tool(command: &str, ai_home: &Path, ai_tool_dir: &Path) -> Option<PathBuf> {
+    let requested = Path::new(command);
+    if requested.components().count() > 1 && requested.is_file() {
+        return Some(requested.to_path_buf());
+    }
+
+    if !ai_tool_dir.as_os_str().is_empty() {
+        let candidate = ai_tool_dir.join(command);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    for dir in [
+        ai_home.join("vand-ai-lism/bin"),
+        ai_home.join(".venv/bin"),
+        ai_home.join("bin"),
+    ] {
+        let candidate = dir.join(command);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    if let Some(paths) = env::var_os("PATH") {
+        for dir in env::split_paths(&paths) {
+            let candidate = dir.join(command);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+fn push_command_log(steps: &mut Vec<String>, label: &str, output: &std::process::Output) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = stdout.trim();
+    let stderr = stderr.trim();
+    if !stdout.is_empty() {
+        steps.push(format!("{label} stdout: {stdout}"));
+    }
+    if !stderr.is_empty() {
+        steps.push(format!("{label} stderr: {stderr}"));
+    }
+}
+
+fn write_ai_manifest(
+    bundle_dir: &Path,
+    input: &Path,
+    ai_backend: &str,
+    ai_home: &Path,
+    status: &str,
+    steps: &[String],
+    artifacts: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let ai_dir = bundle_dir.join("ai");
+    fs::create_dir_all(&ai_dir)
+        .map_err(|err| format!("failed to create {}: {err}", ai_dir.display()))?;
+    let manifest = ai_dir.join("manifest.json");
+    let generated_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let mut text = String::new();
+    text.push_str("{\n");
+    text.push_str("  \"format\": \"vand-ai-lism-ai-manifest-v0\",\n");
+    text.push_str(&format!("  \"generated_at_unix\": {},\n", generated_at));
+    text.push_str(&format!(
+        "  \"backend\": \"{}\",\n",
+        json_escape(ai_backend)
+    ));
+    text.push_str(&format!("  \"status\": \"{}\",\n", json_escape(status)));
+    text.push_str(&format!(
+        "  \"source\": \"{}\",\n",
+        json_escape(&input.display().to_string())
+    ));
+    text.push_str(&format!(
+        "  \"ai_home\": \"{}\",\n",
+        json_escape(&ai_home.display().to_string())
+    ));
+    text.push_str("  \"steps\": [\n");
+    for (index, step) in steps.iter().enumerate() {
+        let comma = if index + 1 == steps.len() { "" } else { "," };
+        text.push_str(&format!("    \"{}\"{}\n", json_escape(step), comma));
+    }
+    text.push_str("  ],\n");
+    text.push_str("  \"artifacts\": [\n");
+    for (index, artifact) in artifacts.iter().enumerate() {
+        let comma = if index + 1 == artifacts.len() {
+            ""
+        } else {
+            ","
+        };
+        text.push_str(&format!(
+            "    \"{}\"{}\n",
+            json_escape(&artifact.display().to_string()),
+            comma
+        ));
+    }
+    text.push_str("  ]\n");
+    text.push_str("}\n");
+    fs::write(&manifest, text)
+        .map_err(|err| format!("failed to write {}: {err}", manifest.display()))?;
+    Ok(manifest)
+}
+
+fn find_first_file_with_suffix(dir: &Path, suffix: &str) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(suffix))
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn run_optional_ai_backend(
+    input: &Path,
+    bundle_dir: &Path,
+    ai_backend: &str,
+    ai_home: &Path,
+    ai_tool_dir: &Path,
+) -> Result<(String, Option<PathBuf>), String> {
+    let backend = ai_backend.trim();
+    if backend.is_empty() || backend == "off" {
+        return Ok(("AI backend off.".to_string(), None));
+    }
+
+    fs::create_dir_all(ai_home)
+        .map_err(|err| format!("failed to create AI home {}: {err}", ai_home.display()))?;
+    let ai_dir = bundle_dir.join("ai");
+    fs::create_dir_all(&ai_dir)
+        .map_err(|err| format!("failed to create {}: {err}", ai_dir.display()))?;
+
+    let mut steps = vec![format!("selected backend: {backend}")];
+    let mut artifacts = Vec::new();
+    let mut ai_notes = None;
+    let mut status = "ready";
+
+    let basic_pitch = if matches!(backend, "basic-pitch" | "demucs-basic-pitch") {
+        find_ai_tool("basic-pitch", ai_home, ai_tool_dir)
+    } else {
+        None
+    };
+    let demucs = if backend == "demucs-basic-pitch" {
+        find_ai_tool("demucs", ai_home, ai_tool_dir)
+    } else {
+        None
+    };
+    if matches!(backend, "basic-pitch" | "demucs-basic-pitch") && basic_pitch.is_none() {
+        status = "missing_ai_tools";
+        steps.push(format!(
+            "basic-pitch command not found; looked in {}, {}/vand-ai-lism/bin, {}/.venv/bin, {}/bin and PATH",
+            if ai_tool_dir.as_os_str().is_empty() {
+                "(no ai_tool_dir configured)".to_string()
+            } else {
+                ai_tool_dir.display().to_string()
+            },
+            ai_home.display(),
+            ai_home.display(),
+            ai_home.display()
+        ));
+    }
+    if backend == "demucs-basic-pitch" && demucs.is_none() {
+        status = "missing_ai_tools";
+        steps.push(format!(
+            "demucs command not found; looked in {}, {}/vand-ai-lism/bin, {}/.venv/bin, {}/bin and PATH",
+            if ai_tool_dir.as_os_str().is_empty() {
+                "(no ai_tool_dir configured)".to_string()
+            } else {
+                ai_tool_dir.display().to_string()
+            },
+            ai_home.display(),
+            ai_home.display(),
+            ai_home.display()
+        ));
+    }
+
+    if status == "ready" {
+        if backend == "demucs-basic-pitch" {
+            let stems_dir = ai_dir.join("stems");
+            fs::create_dir_all(&stems_dir)
+                .map_err(|err| format!("failed to create {}: {err}", stems_dir.display()))?;
+            let mut command = Command::new(demucs.expect("demucs resolved"));
+            command.arg("-o").arg(&stems_dir).arg(input);
+            ai_cache_env(&mut command, ai_home);
+            let output = command
+                .output()
+                .map_err(|err| format!("failed to start demucs: {err}"))?;
+            push_command_log(&mut steps, "demucs", &output);
+            if !output.status.success() {
+                status = "demucs_failed";
+            }
+            artifacts.push(stems_dir);
+        }
+
+        if status == "ready" {
+            let midi_dir = ai_dir.join("basic_pitch");
+            fs::create_dir_all(&midi_dir)
+                .map_err(|err| format!("failed to create {}: {err}", midi_dir.display()))?;
+            let mut command = Command::new(basic_pitch.expect("basic-pitch resolved"));
+            command
+                .arg("--save-midi")
+                .arg("--save-note-events")
+                .arg(&midi_dir)
+                .arg(input);
+            ai_cache_env(&mut command, ai_home);
+            let output = command
+                .output()
+                .map_err(|err| format!("failed to start basic-pitch: {err}"))?;
+            push_command_log(&mut steps, "basic-pitch", &output);
+            if output.status.success() {
+                ai_notes = find_first_file_with_suffix(&midi_dir, "_basic_pitch.csv");
+                artifacts.push(midi_dir);
+                status = "complete";
+            } else {
+                status = "basic_pitch_failed";
+            }
+        }
+    }
+
+    if let Some(path) = &ai_notes {
+        artifacts.push(path.clone());
+    }
+    let manifest = write_ai_manifest(
+        bundle_dir, input, backend, ai_home, status, &steps, &artifacts,
+    )?;
+    let ai_notes_json = if status == "complete" {
+        if let Some(csv_path) = &ai_notes {
+            let out_path = basic_pitch_notes_path(bundle_dir);
+            parse_basic_pitch_csv(csv_path, &out_path)?;
+            Some(out_path)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    Ok(format!(
+        "AI backend {backend}: {status}\nmanifest {}",
+        manifest.display()
+    ))
+    .map(|log| (log, ai_notes_json))
+}
+
+fn basic_pitch_notes_path(bundle_dir: &Path) -> PathBuf {
+    bundle_dir
+        .join("ai")
+        .join("basic_pitch")
+        .join("ai_notes.vand-ai-notes.json")
+}
+
+fn midi_to_hz(midi: i32) -> f32 {
+    440.0 * 2.0f32.powf((midi as f32 - 69.0) / 12.0)
+}
+
+fn parse_basic_pitch_csv(csv_path: &Path, out_path: &Path) -> Result<(), String> {
+    let text = fs::read_to_string(csv_path).map_err(|err| {
+        format!(
+            "failed to read Basic Pitch CSV {}: {err}",
+            csv_path.display()
+        )
+    })?;
+    if let Some(parent) = out_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+    }
+
+    let mut notes = Vec::new();
+    for (line_index, line) in text.lines().enumerate() {
+        if line_index == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let mut columns = line.split(',');
+        let Some(start) = columns.next().and_then(|value| value.parse::<f32>().ok()) else {
+            continue;
+        };
+        let Some(end) = columns.next().and_then(|value| value.parse::<f32>().ok()) else {
+            continue;
+        };
+        let Some(midi) = columns.next().and_then(|value| value.parse::<i32>().ok()) else {
+            continue;
+        };
+        let Some(velocity) = columns.next().and_then(|value| value.parse::<f32>().ok()) else {
+            continue;
+        };
+        if end <= start {
+            continue;
+        }
+        notes.push((start, end, midi, velocity));
+    }
+    notes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let total_seconds = notes
+        .iter()
+        .map(|(_, end, _, _)| *end)
+        .fold(0.0f32, f32::max);
+    let mut out = String::new();
+    out.push_str("{\n");
+    out.push_str("  \"format\": \"vand-ai-lism-ai-notes-v0\",\n");
+    out.push_str("  \"source\": \"basic-pitch\",\n");
+    out.push_str(&format!(
+        "  \"csv\": \"{}\",\n",
+        json_escape(&csv_path.display().to_string())
+    ));
+    out.push_str(&format!("  \"total_seconds\": {:.6},\n", total_seconds));
+    out.push_str("  \"tracks\": [\n");
+    out.push_str(
+        "    {\"role\": \"ai_basic_pitch\", \"chip\": \"ai\", \"channel\": 0, \"events\": [\n",
+    );
+    for (index, (start, end, midi, velocity)) in notes.iter().enumerate() {
+        let comma = if index + 1 == notes.len() { "" } else { "," };
+        out.push_str(&format!(
+            "      {{\"start_time\": {:.6}, \"end_time\": {:.6}, \"duration\": {:.6}, \"midi\": {}, \"hz\": {:.3}, \"velocity\": {:.5}}}{}\n",
+            start,
+            end,
+            end - start,
+            midi,
+            midi_to_hz(*midi),
+            (velocity / 127.0).clamp(0.0, 1.0),
+            comma
+        ));
+    }
+    out.push_str("    ]}\n");
+    out.push_str("  ]\n");
+    out.push_str("}\n");
+    fs::write(out_path, out)
+        .map_err(|err| format!("failed to write AI notes {}: {err}", out_path.display()))
 }
 
 async fn run_blocking<T, F>(work: F) -> Result<T, String>
@@ -1287,7 +2248,13 @@ fn load_instrument_bank(path: String) -> Result<InstrumentBankResult, String> {
 }
 
 #[tauri::command]
-async fn analyse_audio(input: String, output_dir: String) -> Result<AnalysisResult, String> {
+async fn analyse_audio(
+    input: String,
+    output_dir: String,
+    ai_backend: String,
+    ai_home: String,
+    ai_tool_dir: String,
+) -> Result<AnalysisResult, String> {
     run_blocking(move || {
         let repo = repo_root()?;
         let input_path = PathBuf::from(&input);
@@ -1324,6 +2291,21 @@ async fn analyse_audio(input: String, output_dir: String) -> Result<AnalysisResu
             .ok()
             .and_then(|text| serde_json::from_str::<PreviewReport>(&text).ok())
             .unwrap_or_default();
+        let (ai_log, ai_notes_json) = run_optional_ai_backend(
+            &input_path,
+            &bundle_dir,
+            &ai_backend,
+            &PathBuf::from(if ai_home.is_empty() {
+                default_ai_home()
+            } else {
+                ai_home
+            }),
+            &PathBuf::from(ai_tool_dir),
+        )
+        .unwrap_or_else(|err| (format!("AI backend error: {err}"), None));
+        let log = format!("{log}\n{ai_log}\n");
+
+        let ai_manifest = bundle_dir.join("ai").join("manifest.json");
         let summary = AnalysisSummary {
             frames: parse_metric(&log, "frames,"),
             active_frames: parse_metric(&log, "active,"),
@@ -1350,6 +2332,14 @@ async fn analyse_audio(input: String, output_dir: String) -> Result<AnalysisResu
             dac_preview: bundle_dir.join("dac_preview.wav").display().to_string(),
             runtime_preview: bundle_dir.join("runtime_preview.wav").display().to_string(),
             bundle_dir: bundle_dir.display().to_string(),
+            ai_manifest: if ai_manifest.exists() {
+                ai_manifest.display().to_string()
+            } else {
+                String::new()
+            },
+            ai_notes: ai_notes_json
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
         };
 
         Ok(AnalysisResult { summary, log })
@@ -1517,6 +2507,108 @@ async fn note_preview_data_url(
     .await
 }
 
+#[tauri::command]
+async fn ai_note_preview_data_url(
+    path: String,
+    bank_path: String,
+    lead_gain: f32,
+) -> Result<String, String> {
+    run_blocking(move || {
+        let repo = repo_root()?;
+        let ai_notes_path = PathBuf::from(path);
+        let text = fs::read_to_string(&ai_notes_path)
+            .map_err(|err| format!("failed to read {}: {err}", ai_notes_path.display()))?;
+        let ai_notes: VandAiNotes =
+            serde_json::from_str(&text).map_err(|err| format!("invalid AI notes JSON: {err}"))?;
+        let instrument_bank = if bank_path.is_empty() {
+            DEFAULT_INSTRUMENT_BANK.to_string()
+        } else {
+            bank_path.clone()
+        };
+        let arrangement = ai_notes_to_note_arrangement(&ai_notes, instrument_bank);
+        let instruments = load_instrument_bank_for_note_arrangement(
+            &repo,
+            &ai_notes_path,
+            &arrangement,
+            &bank_path,
+        )?;
+        let arrangement_dir = ai_notes_path.parent().unwrap_or_else(|| Path::new("."));
+        let mix = RenderMix {
+            bass_gain: 0.0,
+            lead_gain: lead_gain.clamp(0.0, 2.0),
+            psg_gain: 1.0,
+            dac_gain: 0.0,
+        };
+        let mut samples =
+            render_note_arrangement_samples(&arrangement, &instruments, arrangement_dir, mix);
+        normalize_preview_samples(&mut samples, 22_000);
+        let preview = std::env::temp_dir().join("vand-ai-lism-ai-note-preview.wav");
+        write_preview_wav(&preview, 44_100, &samples)?;
+        let bytes = fs::read(&preview)
+            .map_err(|err| format!("failed to read {}: {err}", preview.display()))?;
+        Ok(format!("data:audio/wav;base64,{}", base64_encode(&bytes)))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn hybrid_note_preview_data_url(
+    path: String,
+    ai_path: String,
+    bank_path: String,
+    bass_gain: f32,
+    lead_gain: f32,
+    psg_gain: f32,
+    dac_gain: f32,
+) -> Result<String, String> {
+    run_blocking(move || {
+        let repo = repo_root()?;
+        let arrangement_path = PathBuf::from(path);
+        let text = fs::read_to_string(&arrangement_path)
+            .map_err(|err| format!("failed to read {}: {err}", arrangement_path.display()))?;
+        let base = if let Ok(plan) = serde_json::from_str::<VandRenderPlan>(&text) {
+            render_plan_to_note_arrangement(&plan)
+        } else {
+            serde_json::from_str::<VandNoteArrangement>(&text)
+                .map_err(|err| format!("invalid render plan or note arrangement JSON: {err}"))?
+        };
+
+        let ai_notes_path = PathBuf::from(ai_path);
+        let ai_text = fs::read_to_string(&ai_notes_path)
+            .map_err(|err| format!("failed to read {}: {err}", ai_notes_path.display()))?;
+        let ai_notes: VandAiNotes = serde_json::from_str(&ai_text)
+            .map_err(|err| format!("invalid AI notes JSON: {err}"))?;
+        let instrument_bank = if bank_path.is_empty() {
+            DEFAULT_INSTRUMENT_BANK.to_string()
+        } else {
+            bank_path.clone()
+        };
+        let arrangement = merge_hybrid_note_arrangement(base, &ai_notes, instrument_bank);
+        let instruments = load_instrument_bank_for_note_arrangement(
+            &repo,
+            &arrangement_path,
+            &arrangement,
+            &bank_path,
+        )?;
+        let arrangement_dir = arrangement_path.parent().unwrap_or_else(|| Path::new("."));
+        let mix = RenderMix {
+            bass_gain: bass_gain.clamp(0.0, 2.0),
+            lead_gain: lead_gain.clamp(0.0, 2.0),
+            psg_gain: psg_gain.clamp(0.0, 2.0),
+            dac_gain: dac_gain.clamp(0.0, 2.0),
+        };
+        let mut samples =
+            render_note_arrangement_samples(&arrangement, &instruments, arrangement_dir, mix);
+        normalize_preview_samples(&mut samples, 22_000);
+        let preview = std::env::temp_dir().join("vand-ai-lism-hybrid-note-preview.wav");
+        write_preview_wav(&preview, 44_100, &samples)?;
+        let bytes = fs::read(&preview)
+            .map_err(|err| format!("failed to read {}: {err}", preview.display()))?;
+        Ok(format!("data:audio/wav;base64,{}", base64_encode(&bytes)))
+    })
+    .await
+}
+
 fn main() {
     configure_native_wayland_environment();
 
@@ -1535,7 +2627,9 @@ fn main() {
             read_text_file,
             instrument_preview_data_url,
             arrangement_preview_data_url,
-            note_preview_data_url
+            note_preview_data_url,
+            ai_note_preview_data_url,
+            hybrid_note_preview_data_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vand-AI-lism");
@@ -1712,6 +2806,9 @@ mod tests {
             source: "/tmp/song.ogg".to_string(),
             output_dir: "audio/converted".to_string(),
             instrument_bank: "audio/instruments/core.json".to_string(),
+            ai_backend: "off".to_string(),
+            ai_home: "/home/nichlas/ai".to_string(),
+            ai_tool_dir: "/home/nichlas/ai/vand-ai-lism/bin".to_string(),
             presets,
         };
         let text = toml::to_string_pretty(&settings).expect("settings toml");
@@ -1721,10 +2818,220 @@ mod tests {
         assert_eq!(decoded.source, settings.source);
         assert_eq!(decoded.output_dir, settings.output_dir);
         assert_eq!(decoded.instrument_bank, settings.instrument_bank);
+        assert_eq!(decoded.ai_tool_dir, settings.ai_tool_dir);
         assert_eq!(
             decoded.presets.get("preview").map(String::as_str),
             Some("note")
         );
+    }
+
+    #[test]
+    fn parses_basic_pitch_csv_to_ai_notes_json() {
+        let dir = std::env::temp_dir().join("vand-ai-lism-basic-pitch-csv-test");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let csv = dir.join("song_basic_pitch.csv");
+        let out = dir.join("ai_notes.vand-ai-notes.json");
+        fs::write(
+            &csv,
+            "start_time_s,end_time_s,pitch_midi,velocity,pitch_bend\n0.100,0.350,64,96,1,1\n0.400,0.550,52,48,1\n",
+        )
+        .expect("csv");
+        parse_basic_pitch_csv(&csv, &out).expect("parse csv");
+        let text = fs::read_to_string(out).expect("ai notes");
+        assert!(text.contains("\"format\": \"vand-ai-lism-ai-notes-v0\""));
+        assert!(text.contains("\"role\": \"ai_basic_pitch\""));
+        assert!(text.contains("\"midi\": 64"));
+        assert!(text.contains("\"velocity\": 0.75591"));
+    }
+
+    #[test]
+    fn renders_ai_notes_preview_with_core_bank() {
+        let repo = repo_root().expect("repo root");
+        let dir = std::env::temp_dir().join("vand-ai-lism-ai-preview-test");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let csv = dir.join("song_basic_pitch.csv");
+        let out = dir.join("ai_notes.vand-ai-notes.json");
+        fs::write(
+            &csv,
+            "start_time_s,end_time_s,pitch_midi,velocity,pitch_bend\n0.000,0.500,64,96,1\n0.500,0.900,67,88,1\n",
+        )
+        .expect("csv");
+        parse_basic_pitch_csv(&csv, &out).expect("parse csv");
+        let text = fs::read_to_string(&out).expect("ai notes");
+        let ai_notes: VandAiNotes = serde_json::from_str(&text).expect("ai notes json");
+        let arrangement =
+            ai_notes_to_note_arrangement(&ai_notes, DEFAULT_INSTRUMENT_BANK.to_string());
+        let instruments = load_instrument_bank_for_note_arrangement(&repo, &out, &arrangement, "")
+            .expect("core bank");
+        let samples = render_note_arrangement_samples(
+            &arrangement,
+            &instruments,
+            out.parent().unwrap(),
+            RenderMix::default(),
+        );
+        assert!(!samples.is_empty());
+        assert!(samples.iter().any(|sample| *sample != 0));
+    }
+
+    #[test]
+    fn selects_melodic_ai_lead_over_low_notes() {
+        let ai = VandAiNotes {
+            sample_rate: 44_100,
+            hop: 512,
+            total_seconds: 1.0,
+            tracks: vec![VandAiNoteTrack {
+                role: "ai_basic_pitch".to_string(),
+                events: vec![
+                    VandAiNoteEvent {
+                        start_time: 0.00,
+                        duration: 0.30,
+                        hz: midi_to_hz(36),
+                        midi: 36,
+                        velocity: 0.95,
+                    },
+                    VandAiNoteEvent {
+                        start_time: 0.02,
+                        duration: 0.24,
+                        hz: midi_to_hz(72),
+                        midi: 72,
+                        velocity: 0.70,
+                    },
+                    VandAiNoteEvent {
+                        start_time: 0.20,
+                        duration: 0.20,
+                        hz: midi_to_hz(74),
+                        midi: 74,
+                        velocity: 0.78,
+                    },
+                ],
+            }],
+        };
+        let selected = select_ai_lead_notes(&ai);
+        assert!(selected.iter().any(|event| event.midi == 72));
+        assert!(selected.iter().all(|event| event.midi != 36));
+    }
+
+    #[test]
+    fn maps_ai_notes_to_multiple_limited_roles() {
+        let ai = VandAiNotes {
+            sample_rate: 44_100,
+            hop: 512,
+            total_seconds: 1.0,
+            tracks: vec![VandAiNoteTrack {
+                role: "ai_basic_pitch".to_string(),
+                events: vec![
+                    VandAiNoteEvent {
+                        start_time: 0.00,
+                        duration: 0.40,
+                        hz: midi_to_hz(40),
+                        midi: 40,
+                        velocity: 0.80,
+                    },
+                    VandAiNoteEvent {
+                        start_time: 0.02,
+                        duration: 0.25,
+                        hz: midi_to_hz(67),
+                        midi: 67,
+                        velocity: 0.72,
+                    },
+                    VandAiNoteEvent {
+                        start_time: 0.08,
+                        duration: 0.18,
+                        hz: midi_to_hz(84),
+                        midi: 84,
+                        velocity: 0.62,
+                    },
+                    VandAiNoteEvent {
+                        start_time: 0.10,
+                        duration: 0.40,
+                        hz: midi_to_hz(60),
+                        midi: 60,
+                        velocity: 0.60,
+                    },
+                    VandAiNoteEvent {
+                        start_time: 0.12,
+                        duration: 0.36,
+                        hz: midi_to_hz(64),
+                        midi: 64,
+                        velocity: 0.58,
+                    },
+                ],
+            }],
+        };
+        let arrangement = ai_notes_to_note_arrangement(&ai, DEFAULT_INSTRUMENT_BANK.to_string());
+        assert!(arrangement.notes.iter().any(|note| note.track == "bass"));
+        assert!(arrangement.notes.iter().any(|note| note.track == "lead"));
+        assert!(arrangement.notes.iter().any(|note| note.track == "counter"));
+        assert!(arrangement.notes.iter().any(|note| note.track == "pad"));
+        assert!(arrangement.notes.iter().any(|note| note.track == "chord"));
+        assert!(arrangement.drums.len() >= 6);
+    }
+
+    #[test]
+    fn renders_hybrid_ai_lead_with_rust_bass() {
+        let repo = repo_root().expect("repo root");
+        let dir = std::env::temp_dir().join("vand-ai-lism-hybrid-preview-test");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let csv = dir.join("song_basic_pitch.csv");
+        let out = dir.join("ai_notes.vand-ai-notes.json");
+        fs::write(
+            &csv,
+            "start_time_s,end_time_s,pitch_midi,velocity,pitch_bend\n0.000,0.500,76,104,1\n0.500,0.900,79,96,1\n",
+        )
+        .expect("csv");
+        parse_basic_pitch_csv(&csv, &out).expect("parse csv");
+        let text = fs::read_to_string(&out).expect("ai notes");
+        let ai_notes: VandAiNotes = serde_json::from_str(&text).expect("ai notes json");
+        let base = VandNoteArrangement {
+            sample_rate: 44_100,
+            hop: 512,
+            total_frames: 96,
+            instrument_bank: DEFAULT_INSTRUMENT_BANK.to_string(),
+            notes: vec![
+                VandNoteEvent {
+                    track: "bass".to_string(),
+                    start_frame: 0,
+                    frames: 80,
+                    hz: 110.0,
+                    velocity: 0.8,
+                    instrument_id: DEFAULT_BASS_INSTRUMENT.to_string(),
+                },
+                VandNoteEvent {
+                    track: "lead".to_string(),
+                    start_frame: 0,
+                    frames: 80,
+                    hz: 220.0,
+                    velocity: 0.8,
+                    instrument_id: DEFAULT_LEAD_INSTRUMENT.to_string(),
+                },
+            ],
+            drums: Vec::new(),
+        };
+        let arrangement =
+            merge_hybrid_note_arrangement(base, &ai_notes, DEFAULT_INSTRUMENT_BANK.to_string());
+        assert!(arrangement.notes.iter().any(|note| note.track == "bass"));
+        assert!(
+            arrangement
+                .notes
+                .iter()
+                .any(|note| { note.track == "lead" && (note.hz - midi_to_hz(76)).abs() < 0.5 })
+        );
+        assert!(
+            !arrangement
+                .notes
+                .iter()
+                .any(|note| { note.track == "lead" && (note.hz - 220.0).abs() < 0.5 })
+        );
+        assert!(arrangement.drums.len() >= 6);
+        let instruments = load_instrument_bank_for_note_arrangement(&repo, &out, &arrangement, "")
+            .expect("core bank");
+        let samples = render_note_arrangement_samples(
+            &arrangement,
+            &instruments,
+            out.parent().unwrap(),
+            RenderMix::default(),
+        );
+        assert!(samples.iter().any(|sample| *sample != 0));
     }
 
     #[test]
@@ -1747,5 +3054,17 @@ mod tests {
         let mut out = vec![0i16; 256];
         mix_dac_drums(&mut out, &drums, &dir, 32, 1.0);
         assert!(out.iter().any(|sample| *sample != 0));
+
+        let fallback_drums = vec![VandDrumEvent {
+            start_frame: 1,
+            velocity: 0.85,
+            noise_amp: 0.20,
+            instrument_id: DEFAULT_NOISE_INSTRUMENT.to_string(),
+            dac_chunk: None,
+            dac_path: String::new(),
+        }];
+        let mut fallback_out = vec![0i16; 8_000];
+        mix_dac_drums(&mut fallback_out, &fallback_drums, &dir, 32, 1.0);
+        assert!(fallback_out.iter().any(|sample| *sample != 0));
     }
 }

@@ -587,6 +587,8 @@ struct ImportedInstrumentRecord {
     name: String,
     chip: String,
     category: String,
+    role: String,
+    tags: Vec<String>,
     source: PathBuf,
     output: PathBuf,
 }
@@ -653,6 +655,139 @@ fn category_from_path(path: &Path) -> String {
         }
     }
     "uncurated".to_string()
+}
+
+fn classify_instrument_role(instrument: &FurnaceInstrument, category: &str) -> String {
+    let name = instrument.name.to_ascii_lowercase();
+    let text = format!(
+        "{} {}",
+        name,
+        instrument
+            .path
+            .parent()
+            .and_then(|parent| parent.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+    );
+
+    if instrument.instrument_type == 0 || category == "psg" {
+        return "psg".to_string();
+    }
+    if category == "bass"
+        || text.contains("bass")
+        || text.contains("sub")
+        || text.contains("wob")
+        || text.contains("growl")
+    {
+        return "bass".to_string();
+    }
+    if category == "pad"
+        || text.contains("pad")
+        || text.contains("string")
+        || text.contains("choir")
+        || text.contains("warm")
+    {
+        return "pad".to_string();
+    }
+    if category == "drum"
+        || text.contains("drum")
+        || text.contains("perc")
+        || text.contains("kick")
+        || text.contains("snare")
+    {
+        return "drum".to_string();
+    }
+    if text.contains("pluck")
+        || text.contains("arp")
+        || text.contains("bell")
+        || text.contains("seq")
+        || text.contains("hook")
+    {
+        return "hook".to_string();
+    }
+    if category == "lead"
+        || text.contains("lead")
+        || text.contains("solo")
+        || text.contains("saw")
+        || text.contains("sync")
+        || text.contains("brass")
+    {
+        return "lead".to_string();
+    }
+    if category == "keys"
+        || text.contains("key")
+        || text.contains("organ")
+        || text.contains("piano")
+    {
+        return "chord".to_string();
+    }
+
+    if let Some(fm) = &instrument.fm {
+        if fm.algorithm >= 6 {
+            "pad".to_string()
+        } else if fm.feedback >= 5 {
+            "bass".to_string()
+        } else {
+            "lead".to_string()
+        }
+    } else {
+        "lead".to_string()
+    }
+}
+
+fn unique_tag(tags: &mut Vec<String>, tag: &str) {
+    if !tags.iter().any(|item| item == tag) {
+        tags.push(tag.to_string());
+    }
+}
+
+fn instrument_tags(instrument: &FurnaceInstrument, category: &str, role: &str) -> Vec<String> {
+    let mut tags = Vec::new();
+    unique_tag(&mut tags, role);
+    unique_tag(&mut tags, category);
+    unique_tag(&mut tags, chip_name(instrument.instrument_type));
+
+    let name = instrument.name.to_ascii_lowercase();
+    for (needle, tag) in [
+        ("bass", "low"),
+        ("sub", "low"),
+        ("growl", "aggressive"),
+        ("wob", "aggressive"),
+        ("lead", "melodic"),
+        ("hook", "melodic"),
+        ("pluck", "short"),
+        ("bell", "bright"),
+        ("pad", "sustained"),
+        ("string", "sustained"),
+        ("brass", "bright"),
+        ("organ", "chord"),
+        ("piano", "chord"),
+        ("drum", "percussive"),
+        ("kick", "percussive"),
+        ("snare", "percussive"),
+    ] {
+        if name.contains(needle) {
+            unique_tag(&mut tags, tag);
+        }
+    }
+
+    if let Some(fm) = &instrument.fm {
+        if fm.algorithm >= 6 {
+            unique_tag(&mut tags, "sustained");
+        }
+        if fm.feedback >= 5 {
+            unique_tag(&mut tags, "aggressive");
+        }
+        if fm
+            .operators
+            .iter()
+            .any(|op| op.attack_rate >= 24 && op.release_rate >= 8)
+        {
+            unique_tag(&mut tags, "short");
+        }
+    }
+
+    tags
 }
 
 fn read_c_string(bytes: &[u8]) -> String {
@@ -912,6 +1047,8 @@ fn write_furnace_instrument_json(
     path: &Path,
     instrument: &FurnaceInstrument,
     category: &str,
+    role: &str,
+    tags: &[String],
 ) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -933,6 +1070,15 @@ fn write_furnace_instrument_json(
         chip_name(instrument.instrument_type)
     ));
     text.push_str(&format!("  \"category\": \"{}\",\n", json_escape(category)));
+    text.push_str(&format!("  \"role\": \"{}\",\n", json_escape(role)));
+    text.push_str("  \"tags\": [");
+    for (i, tag) in tags.iter().enumerate() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(&format!("\"{}\"", json_escape(tag)));
+    }
+    text.push_str("],\n");
     text.push_str("  \"source\": {\n");
     text.push_str("    \"kind\": \"furnace_fui\",\n");
     text.push_str(&format!(
@@ -1062,12 +1208,15 @@ fn import_instrument(args: &Args) -> io::Result<()> {
         PathBuf::from("audio/instruments/imported").join(format!("{stem}.vand-instrument.json"))
     });
     let category = category_from_path(input);
-    write_furnace_instrument_json(&out, &instrument, &category)?;
+    let role = classify_instrument_role(&instrument, &category);
+    let tags = instrument_tags(&instrument, &category, &role);
+    write_furnace_instrument_json(&out, &instrument, &category, &role, &tags)?;
     println!(
-        "imported {} ({}, {}) to {}",
+        "imported {} ({}, {}, role {}) to {}",
         instrument.name,
         chip_name(instrument.instrument_type),
         category,
+        role,
         out.display()
     );
     Ok(())
@@ -1139,6 +1288,18 @@ fn write_instrument_bank_manifest(
             json_escape(&record.category)
         ));
         text.push_str(&format!(
+            "      \"role\": \"{}\",\n",
+            json_escape(&record.role)
+        ));
+        text.push_str("      \"tags\": [");
+        for (tag_index, tag) in record.tags.iter().enumerate() {
+            if tag_index > 0 {
+                text.push_str(", ");
+            }
+            text.push_str(&format!("\"{}\"", json_escape(tag)));
+        }
+        text.push_str("],\n");
+        text.push_str(&format!(
             "      \"source\": \"{}\",\n",
             json_escape(&record.source.display().to_string())
         ));
@@ -1187,9 +1348,11 @@ fn import_instrument_dir(args: &Args) -> io::Result<()> {
         match parse_furnace_instrument(&file) {
             Ok(instrument) => {
                 let category = category_from_path(&file);
+                let role = classify_instrument_role(&instrument, &category);
+                let tags = instrument_tags(&instrument, &category, &role);
                 let id = sanitize_id(&instrument.name);
                 let output = unique_output_path(&out_dir, &id, &mut used_ids);
-                write_furnace_instrument_json(&output, &instrument, &category)?;
+                write_furnace_instrument_json(&output, &instrument, &category, &role, &tags)?;
                 records.push(ImportedInstrumentRecord {
                     id: output
                         .file_stem()
@@ -1200,6 +1363,8 @@ fn import_instrument_dir(args: &Args) -> io::Result<()> {
                     name: instrument.name,
                     chip: chip_name(instrument.instrument_type).to_string(),
                     category,
+                    role,
+                    tags,
                     source: file,
                     output,
                 });
@@ -2964,12 +3129,13 @@ fn stable_midi_candidates(
     context: &MusicalContext,
 ) -> Vec<Option<(i32, f32)>> {
     let mut raw = Vec::with_capacity(frames.len());
-    let threshold = if track == "bass" {
-        0.06
-    } else if track == "hook" {
-        0.04
-    } else {
-        0.05
+    let threshold = match track {
+        "bass" => 0.055,
+        "lead" => 0.038,
+        "mid" => 0.044,
+        "high" => 0.036,
+        "hook" => 0.032,
+        _ => 0.045,
     };
     for frame in frames {
         let (hz, amp) = match track {
@@ -3027,12 +3193,10 @@ fn stable_midi_candidates(
             pending_count = 1;
         }
 
-        let confirm_frames = if track == "bass" {
-            4
-        } else if matches!(track, "hook" | "high") {
-            2
-        } else {
-            3
+        let confirm_frames = match track {
+            "bass" => 4,
+            "lead" | "hook" | "high" => 2,
+            _ => 3,
         };
         if pending_count >= confirm_frames {
             current = Some(midi);
@@ -3053,19 +3217,16 @@ fn build_note_events_for_track(
     instrument_id: &'static str,
     context: &MusicalContext,
 ) -> Vec<NoteEvent> {
-    let min_note_frames = if track == "bass" {
-        8
-    } else if track == "hook" {
-        4
-    } else {
-        6
+    let min_note_frames = match track {
+        "bass" => 7,
+        "lead" => 4,
+        "hook" | "high" => 3,
+        _ => 5,
     };
-    let max_bridge_gap = if track == "bass" {
-        3
-    } else if track == "hook" {
-        1
-    } else {
-        2
+    let max_bridge_gap = match track {
+        "bass" => 3,
+        "lead" | "hook" | "high" => 1,
+        _ => 2,
     };
     let candidates = stable_midi_candidates(frames, track, min_midi, max_midi, context);
     let mut notes = Vec::new();
@@ -3161,7 +3322,7 @@ fn build_note_events_for_track(
 }
 
 fn quantize_note_grid(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<NoteEvent> {
-    let max_shift = (context.grid_frames / 3).max(1);
+    let max_shift = (context.grid_frames / 4).max(1);
     let mut quantized = Vec::with_capacity(notes.len());
     for mut note in notes {
         let end = note.start_frame.saturating_add(note.frames);
@@ -3267,7 +3428,7 @@ fn filter_lead_notes_against_bass(
 ) -> Vec<NoteEvent> {
     lead_notes
         .into_iter()
-        .filter(|lead| lead.velocity >= 0.075 && lead.frames >= 8)
+        .filter(|lead| lead.velocity >= 0.052 && lead.frames >= 4)
         .filter(|lead| {
             !bass_notes.iter().any(|bass| {
                 let overlap = note_overlap_frames(lead, bass);
@@ -3283,17 +3444,17 @@ fn smooth_lead_melody(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<No
     let mut notes = merge_neighbor_notes(notes);
     notes.sort_by_key(|note| note.start_frame);
 
-    let min_spacing = context.grid_frames.max(2) * 2;
+    let min_spacing = (context.grid_frames.max(2) * 3 / 2).max(3);
     let mut out: Vec<NoteEvent> = Vec::new();
     for mut note in notes {
-        if note.velocity < 0.14 || note.frames < min_spacing {
+        if note.velocity < 0.08 || note.frames < min_spacing / 2 {
             continue;
         }
 
         if let Some(last) = out.last_mut() {
             let last_end = last.start_frame.saturating_add(last.frames);
             let gap = note.start_frame.saturating_sub(last_end);
-            if note.start_frame < last_end || gap < min_spacing / 2 {
+            if note.start_frame < last_end || gap < min_spacing / 3 {
                 let last_score = last.velocity * last.frames as f32;
                 let note_score = note.velocity * note.frames as f32;
                 if note_score > last_score * 1.18 {
@@ -3315,7 +3476,7 @@ fn smooth_lead_melody(notes: Vec<NoteEvent>, context: &MusicalContext) -> Vec<No
             note.hz = midi_to_hz(note.midi);
         }
 
-        note.velocity = note.velocity.clamp(0.12, 0.78);
+        note.velocity = note.velocity.clamp(0.10, 0.82);
         out.push(note);
     }
 
@@ -3543,16 +3704,18 @@ fn build_spectral_counter_notes(
 }
 
 fn build_hook_notes(frames: &[AnalysisFrame], context: &MusicalContext) -> Vec<NoteEvent> {
+    let min_frames = (context.grid_frames / 2).max(4);
     let notes =
         build_note_events_for_track(frames, "hook", 67, 96, DEFAULT_LEAD_INSTRUMENT, context)
             .into_iter()
+            .filter(|note| note.frames >= min_frames && note.velocity >= 0.055)
             .map(|mut note| {
                 note.track = "hook";
-                note.velocity = (note.velocity * 0.92).clamp(0.08, 0.72);
+                note.velocity = (note.velocity * 0.90).clamp(0.08, 0.70);
                 note
             })
             .collect();
-    merge_neighbor_notes(notes)
+    smooth_lead_melody(merge_neighbor_notes(notes), context)
 }
 
 fn build_psg_lead_notes(lead_notes: &[NoteEvent]) -> Vec<NoteEvent> {
@@ -3947,7 +4110,7 @@ fn write_note_arrangement_json(
         drum_events.len(),
         dac_drums
     ));
-    out.push_str("  \"pipeline\": [\"frame_analysis\", \"key_detection\", \"scale_snap\", \"beat_grid\", \"pitch_hysteresis\", \"bass_pattern_lock\", \"lead_confidence_filter\", \"lead_melodic_smoothing\", \"harmony_pad_arranger\", \"chord_body_arranger\", \"counter_melody_arranger\", \"psg_hook_arranger\", \"drum_gate\", \"drum_grid_lock\"],\n");
+    out.push_str("  \"pipeline\": [\"frame_analysis\", \"key_detection\", \"scale_snap\", \"beat_grid\", \"pitch_hysteresis\", \"bass_pattern_lock\", \"lead_confidence_filter\", \"lead_melodic_smoothing\", \"harmony_pad_arranger\", \"chord_body_arranger\", \"counter_melody_arranger\", \"fm_hook_arranger\", \"psg_hook_arranger\", \"drum_gate\", \"drum_grid_lock\"],\n");
 
     out.push_str("  \"notes\": [\n");
     let total_notes = bass_notes.len()
@@ -3955,6 +4118,7 @@ fn write_note_arrangement_json(
         + pad_notes.len()
         + chord_notes.len()
         + counter_notes.len()
+        + hook_notes.len()
         + psg_lead_notes.len()
         + psg_counter_notes.len()
         + psg_bass_notes.len();
@@ -3965,6 +4129,7 @@ fn write_note_arrangement_json(
         .chain(pad_notes.iter())
         .chain(chord_notes.iter())
         .chain(counter_notes.iter())
+        .chain(hook_notes.iter())
         .chain(psg_lead_notes.iter())
         .chain(psg_counter_notes.iter())
         .chain(psg_bass_notes.iter())
@@ -4076,6 +4241,7 @@ fn write_render_plan_json(
         ("pad", "ym2612", 2usize, pad_notes.as_slice()),
         ("chord", "ym2612", 3usize, chord_notes.as_slice()),
         ("counter", "ym2612", 4usize, counter_notes.as_slice()),
+        ("hook", "ym2612", 5usize, hook_notes.as_slice()),
         ("psg_lead", "psg", 0usize, psg_lead_notes.as_slice()),
         ("psg_counter", "psg", 1usize, psg_counter_notes.as_slice()),
         ("psg_bass", "psg", 2usize, psg_bass_notes.as_slice()),
@@ -4083,7 +4249,7 @@ fn write_render_plan_json(
     .iter()
     .enumerate()
     {
-        let track_comma = if track_index == 7 { "" } else { "," };
+        let track_comma = if track_index == 8 { "" } else { "," };
         out.push_str(&format!(
             "    {{\"role\": \"{}\", \"chip\": \"{}\", \"channel\": {}, \"events\": [\n",
             role, chip, channel

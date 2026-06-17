@@ -58,6 +58,8 @@ It writes a bundle:
 - `audio/converted/<name>.vand-audio/stems/residual.wav`
 - `audio/converted/<name>.vand-audio/preview.wav`
 - `audio/converted/<name>.vand-audio/debug.png`
+- `audio/converted/<name>.vand-audio/ai/manifest.json` when an optional AI
+  backend is enabled from the Tauri UI
 
 The generated SGDK header uses `src/vand_audio.h`. Copy or include the
 generated `sgdk_audio.c/.h` in a test target, call `VandAudio_start()` with the
@@ -76,13 +78,14 @@ vertical content becomes `stems/percussive.wav`, and leftovers become
 `stems/residual.wav`. It is intentionally dependency-light so the tool can run
 before we decide whether to add a heavier local model.
 
-Next milestones:
+Current milestones:
 
 1. Add licensed source asset import and attribution metadata.
 2. Improve the YM2612 VGM exporter with real voice search and noise/DAC events.
 3. Add `.ym` export for debug and comparison.
 4. Add a tiny audio test ROM around the SGDK runtime player.
-5. Add optional heavy stem separation when a local model is available.
+5. Wire optional AI output into the note arranger instead of only recording it
+   as sidecar metadata.
 6. Move DAC playback from the current 60 Hz scheduler to tighter interrupt/Z80 timing.
 
 `debug.vgm` is intentionally a listening/debug artifact. It writes YM2612
@@ -132,6 +135,61 @@ provides audio players for the original source and exported `dac_preview.wav`.
 It can also import or open `bank.vand-instruments.json` manifests, list patches,
 and preview a selected YM2612/SN76489 instrument through the local EutherOxide
 audio core by writing Mega Drive sound-chip registers and rendering a short WAV.
+The front-end also has an `AI analysis` selector. `Off` keeps the deterministic
+Rust analyser only. `Basic Pitch` and `Demucs + Basic Pitch` are optional local
+toolchain hooks; they do not download or install anything by themselves.
+
+AI settings are persisted in `tools/audio/vand_ai_lism/settings.toml`:
+
+```toml
+ai_backend = "off"
+ai_home = "/home/nichlas/ai"
+ai_tool_dir = ""
+```
+
+`ai_home` is used for model/tool caches by setting `XDG_CACHE_HOME`, `HF_HOME`
+and `TORCH_HOME` for the invoked AI command. `ai_tool_dir` is optional and can
+point directly at a local venv/bin, for example
+`/home/nichlas/ai/vand-ai-lism/bin`. If it is empty, Vand-AI-lism also searches
+`<ai_home>/vand-ai-lism/bin`, `<ai_home>/.venv/bin`, `<ai_home>/bin`, and then
+`PATH`. The first implemented backend is `basic-pitch`, which writes MIDI-side
+artifacts under
+`audio/converted/<name>.vand-audio/ai/basic_pitch/` and records status, command
+output and artifact paths in `ai/manifest.json`. `demucs-basic-pitch` checks
+that both `demucs` and `basic-pitch` exist, writes Demucs output under
+`ai/stems/`, then runs Basic Pitch. The source-separation output is still a
+sidecar; it is not yet fed into the arranger.
+
+The `Preview source` selector controls the note preview renderer:
+
+- `Rust`: the deterministic Vand-AI-lism arranger.
+- `AI`: Basic Pitch notes only, reduced into separate bass, pad, chord, lead,
+  and counter FM roles, plus synthesized PSG drums from AI note onsets.
+- `Hybrid`: Rust bass/drums/PSG with Basic Pitch replacing lead-style notes and
+  an added dense PSG drum grid.
+
+Basic Pitch can emit many simultaneous notes. Vand-AI-lism does not feed all of
+them into one FM channel. It now selects limited bass, pad, chord, lead, and
+high counter roles in short time windows. The pad/chord voices use lower gain
+and sustained mid-register notes to add controlled polyphony. Hybrid mode keeps
+the deterministic Rust bass/drums/PSG foundation and adds the selected AI
+pad/chord/lead/counter roles on top. The AI preview also synthesizes drums from
+low-note/onset accents plus a 16th-note grid; Hybrid merges that with the Rust
+drum events to make previews more rhythmically active. Program previews do not
+leave generated drums as raw PSG noise: the renderer now keeps PSG noise low and
+mixes a deterministic PCM-style kick/snare/hat fallback whenever no DAC chunk is
+available.
+
+See `docs/ai_music_model_inventory.md` for the current online model/tool
+inventory and the planned order of integration. To create the local tool venv,
+run:
+
+```sh
+sh tools/audio/setup_vand_ai_lism_ai.sh
+```
+
+The script requires Python 3.9-3.11. It intentionally refuses the system
+Python 3.14 because Basic Pitch does not list that version as supported.
 
 `analyse-audio` is the first Rust-native import/transcription pass. It accepts
 direct 16-bit PCM WAV and can import MP3/OGG/FLAC/other ffmpeg-supported audio

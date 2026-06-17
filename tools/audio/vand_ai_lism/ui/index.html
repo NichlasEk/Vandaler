@@ -56,6 +56,14 @@
 
         <section class="renderControls">
           <label>
+            <span>AI analysis</span>
+            <select id="aiBackend">
+              <option value="off">Off</option>
+              <option value="basic-pitch">Basic Pitch</option>
+              <option value="demucs-basic-pitch">Demucs + Basic Pitch</option>
+            </select>
+          </label>
+          <label>
             <span>Preview preset</span>
             <select id="previewPreset">
               <option value="balanced">Balanced</option>
@@ -63,6 +71,14 @@
               <option value="dac-heavy">DAC Heavy</option>
               <option value="lead-cut">Bass First</option>
               <option value="custom">Custom</option>
+            </select>
+          </label>
+          <label>
+            <span>Preview source</span>
+            <select id="previewSource">
+              <option value="rust">Rust</option>
+              <option value="ai">AI</option>
+              <option value="hybrid">Hybrid</option>
             </select>
           </label>
           <label>
@@ -127,6 +143,17 @@
               <div class="progressTrack"><div></div></div>
             </div>
             <audio id="notePlayer" controls></audio>
+          </article>
+          <article>
+            <div class="panelTitle">
+              <span>AI Preview</span>
+              <button id="loadAiBtn" disabled>Render</button>
+            </div>
+            <div id="aiProgress" class="progressBlock compact" hidden>
+              <div class="progressLabel">Rendering AI preview</div>
+              <div class="progressTrack"><div></div></div>
+            </div>
+            <audio id="aiPlayer" controls></audio>
           </article>
           <article>
             <div class="panelTitle">
