@@ -57,13 +57,14 @@ static void ymSetFrequency(u8 channel, u16 fnum, u8 block)
 static void ymSetLevel(u8 channel, u8 level)
 {
     const u8 clamped = level > 15 ? 15 : level;
-    const u8 carrierTl = 127 - (clamped * 7);
+    const u8 carrierTl = 127 - (clamped * 8);
+    const u8 modTl = clamped > 0 ? 72 - (clamped * 3) : 112;
     const u8 part = ymPart(channel);
     const u8 slot = ymSlot(channel);
 
-    YM2612_writeReg(part, 0x40 + slot, 112);
-    YM2612_writeReg(part, 0x44 + slot, 112);
-    YM2612_writeReg(part, 0x48 + slot, 112);
+    YM2612_writeReg(part, 0x40 + slot, modTl);
+    YM2612_writeReg(part, 0x44 + slot, modTl);
+    YM2612_writeReg(part, 0x48 + slot, modTl);
     YM2612_writeReg(part, 0x4C + slot, carrierTl);
 }
 
@@ -78,7 +79,7 @@ static void ymInitVoice(u8 channel, bool bass)
     const u8 slot = ymSlot(channel);
     u8 op;
 
-    YM2612_writeReg(part, 0xB0 + slot, bass ? 0x32 : 0x31);
+    YM2612_writeReg(part, 0xB0 + slot, bass ? 0x33 : 0x37);
     YM2612_writeReg(part, 0xB4 + slot, 0xC0);
 
     for (op = 0; op < 4; op++)
@@ -272,18 +273,13 @@ void VandAudio_stop(VandAudioPlayer *player)
         player->wait = 0;
     }
 
-    ymKey(VAND_AUDIO_FM_BASS_CH, FALSE);
-    ymKey(VAND_AUDIO_FM_LEAD_CH, FALSE);
-    ymKey(VAND_AUDIO_FM_PAD_CH, FALSE);
-    fmCurrentFnum[0] = 0;
-    fmCurrentFnum[1] = 0;
-    fmCurrentFnum[2] = 0;
-    fmCurrentBlock[0] = 0;
-    fmCurrentBlock[1] = 0;
-    fmCurrentBlock[2] = 0;
-    fmCurrentLevel[0] = 0;
-    fmCurrentLevel[1] = 0;
-    fmCurrentLevel[2] = 0;
+    for (u8 i = 0; i < VAND_AUDIO_FM_CHANNELS; i++)
+    {
+        ymKey(i, FALSE);
+        fmCurrentFnum[i] = 0;
+        fmCurrentBlock[i] = 0;
+        fmCurrentLevel[i] = 0;
+    }
     PSG_setEnvelope(0, PSG_ENVELOPE_MIN);
     PSG_setEnvelope(1, PSG_ENVELOPE_MIN);
     PSG_setEnvelope(2, PSG_ENVELOPE_MIN);
