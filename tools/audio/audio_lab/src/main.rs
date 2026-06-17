@@ -2210,7 +2210,7 @@ fn note_to_runtime_pitch(note: Option<&NoteEvent>) -> (u16, u8, u8) {
         let level = if fnum == 0 {
             0
         } else {
-            level15(note.velocity * 0.95)
+            level15(note.velocity * 2.35)
         };
         return (fnum, block, level);
     }
@@ -2229,7 +2229,7 @@ fn note_to_psg_pitch(note: Option<&NoteEvent>) -> (u16, u8) {
     if let Some(note) = note {
         let tone = psg_tone_from_hz(note.hz);
         if tone > 0 {
-            return (tone, level15(note.velocity * 0.85));
+            return (tone, level15(note.velocity * 1.75));
         }
     }
     (0, 0)
