@@ -377,6 +377,103 @@ audio {
   font-size: 24px;
 }
 
+.debugPanel {
+  margin-bottom: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 8px;
+  padding: 14px;
+  background: #171c26;
+}
+
+.debugMeta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.debugMeta div,
+.trackSummary article,
+.noteInspector div {
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 6px;
+  background: #111721;
+}
+
+.debugMeta div {
+  padding: 9px 10px;
+}
+
+.debugMeta span {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.debugMeta strong {
+  color: #f1b24a;
+  font-size: 18px;
+}
+
+#debugCanvas {
+  display: block;
+  width: 100%;
+  height: 280px;
+  border: 1px solid rgba(241, 178, 74, 0.24);
+  border-radius: 8px;
+  background: #090b10;
+}
+
+.trackSummary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+  color: #d9dfec;
+}
+
+.trackSummary article {
+  padding: 9px 10px;
+}
+
+.trackSummary strong,
+.trackSummary span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trackSummary strong {
+  color: #f4f0e8;
+}
+
+.trackSummary span,
+.noteInspector span {
+  font-size: 12px;
+}
+
+.noteInspector {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+  max-height: 190px;
+  margin-top: 12px;
+  overflow: auto;
+}
+
+.noteInspector div {
+  padding: 8px 9px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.noteInspector strong {
+  display: block;
+  color: #f1b24a;
+}
+
 .exports {
   min-height: 128px;
   padding: 14px;
@@ -416,7 +513,8 @@ pre {
   .instrumentBank,
   .renderControls,
   .players,
-  .stats {
+  .stats,
+  .debugMeta {
     grid-template-columns: 1fr;
   }
 }

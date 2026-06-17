@@ -164,6 +164,22 @@
           <div><span>Loop</span><strong id="musicLoop">-</strong></div>
         </section>
 
+        <section class="debugPanel">
+          <div class="panelTitle">
+            <span>Transcription Debug</span>
+            <button id="reloadDebugBtn" disabled>Reload</button>
+          </div>
+          <div class="debugMeta" id="debugMeta">
+            <div><span>Grid</span><strong>-</strong></div>
+            <div><span>Offset</span><strong>-</strong></div>
+            <div><span>FM Notes</span><strong>-</strong></div>
+            <div><span>PSG Notes</span><strong>-</strong></div>
+          </div>
+          <canvas id="debugCanvas" width="1280" height="280"></canvas>
+          <div id="trackSummary" class="trackSummary">No debug data.</div>
+          <div id="noteInspector" class="noteInspector"></div>
+        </section>
+
         <section class="exports">
           <h2>Exports</h2>
           <div id="exportList" class="exportList">No analysis yet.</div>

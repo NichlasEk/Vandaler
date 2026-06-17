@@ -1417,6 +1417,15 @@ async fn audio_data_url(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn read_text_file(path: String) -> Result<String, String> {
+    run_blocking(move || {
+        let path = PathBuf::from(path);
+        fs::read_to_string(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))
+    })
+    .await
+}
+
+#[tauri::command]
 async fn instrument_preview_data_url(path: String) -> Result<String, String> {
     run_blocking(move || {
         let path = PathBuf::from(path);
@@ -1523,6 +1532,7 @@ fn main() {
             analyse_audio,
             import_instrument_dir,
             audio_data_url,
+            read_text_file,
             instrument_preview_data_url,
             arrangement_preview_data_url,
             note_preview_data_url

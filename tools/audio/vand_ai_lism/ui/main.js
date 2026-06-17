@@ -7,6 +7,7 @@ const state = {
   bank: null,
   bankPath: "",
   selectedInstrument: null,
+  debug: null,
   busyCount: 0,
   settingsLoaded: false,
   presets: {
@@ -167,9 +168,11 @@ function setSummary(summary) {
   $("loadArrangementBtn").disabled = !summary?.arrangement;
   $("loadNoteBtn").disabled = !(summary?.render_plan || summary?.note_arrangement);
   $("loadRuntimeBtn").disabled = !summary?.runtime_preview;
+  $("reloadDebugBtn").disabled = !(summary?.arrangement && summary?.render_plan);
 
   if (!summary) {
     $("exportList").textContent = "No analysis yet.";
+    clearDebug();
     return;
   }
 
@@ -187,6 +190,231 @@ function setSummary(summary) {
     const row = document.createElement("div");
     row.textContent = `${label}: ${value}`;
     $("exportList").appendChild(row);
+  }
+  void loadDebug();
+}
+
+async function readJson(path) {
+  if (!path) return null;
+  const text = await invoke("read_text_file", { path });
+  return JSON.parse(text);
+}
+
+function clearDebug(message = "No debug data.") {
+  state.debug = null;
+  const canvas = $("debugCanvas");
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#090b10";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#6f7788";
+  ctx.font = "24px sans-serif";
+  ctx.fillText(message, 28, 52);
+  $("trackSummary").textContent = message;
+  $("noteInspector").innerHTML = "";
+  $("debugMeta").innerHTML = [
+    ["Grid", "-"],
+    ["Offset", "-"],
+    ["FM Notes", "-"],
+    ["PSG Notes", "-"],
+  ]
+    .map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`)
+    .join("");
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, Number(value) || 0));
+}
+
+function trackColor(role) {
+  return {
+    bass: "#ff6a3d",
+    lead: "#f1b24a",
+    pad: "#5fd38d",
+    chord: "#49a6ff",
+    counter: "#d783ff",
+    psg_lead: "#fff1a8",
+    psg_counter: "#9fe7ff",
+    psg_bass: "#ff8fba",
+  }[role] || "#d9dfec";
+}
+
+function compactTime(frames, hop, sampleRate) {
+  if (!sampleRate || !hop) return "0.00s";
+  return `${((frames * hop) / sampleRate).toFixed(2)}s`;
+}
+
+function collectTrackStats(renderPlan) {
+  return (renderPlan?.tracks || []).map((track) => {
+    const events = track.events || [];
+    const activeFrames = events.reduce((sum, event) => sum + (event.frames || 0), 0);
+    const avgVelocity = events.length
+      ? events.reduce((sum, event) => sum + (event.velocity || 0), 0) / events.length
+      : 0;
+    return {
+      role: track.role,
+      chip: track.chip,
+      channel: track.channel,
+      events,
+      count: events.length,
+      activeFrames,
+      avgVelocity,
+    };
+  });
+}
+
+function drawDebugCanvas(arrangement, renderPlan) {
+  const canvas = $("debugCanvas");
+  const ctx = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  const frames = arrangement?.events || [];
+  const tracks = collectTrackStats(renderPlan);
+  const totalFrames = Math.max(renderPlan?.total_frames || arrangement?.events?.length || 1, 1);
+  const topHeight = 88;
+  const rowHeight = Math.max(16, Math.floor((height - topHeight - 18) / Math.max(1, tracks.length)));
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#090b10";
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 8; i += 1) {
+    const x = Math.round((i / 8) * width);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+
+  for (const frame of frames) {
+    const x = Math.floor((frame.index / totalFrames) * width);
+    const nextX = Math.max(x + 1, Math.floor(((frame.index + 1) / totalFrames) * width));
+    const rms = clamp01(frame.rms);
+    const transient = clamp01(frame.transient);
+    const noise = clamp01(frame.noise_amp);
+    const barHeight = Math.max(1, Math.round(rms * topHeight));
+    ctx.fillStyle = `rgba(73, 166, 255, ${0.10 + rms * 0.38})`;
+    ctx.fillRect(x, topHeight - barHeight, nextX - x, barHeight);
+    if (transient > 0.18) {
+      ctx.fillStyle = `rgba(255, 106, 61, ${Math.min(0.80, transient)})`;
+      ctx.fillRect(x, 0, Math.max(1, nextX - x), topHeight);
+    } else if (noise > 0.18) {
+      ctx.fillStyle = `rgba(241, 178, 74, ${Math.min(0.30, noise * 0.45)})`;
+      ctx.fillRect(x, 0, Math.max(1, nextX - x), topHeight);
+    }
+  }
+
+  ctx.fillStyle = "#b9c2d2";
+  ctx.font = "14px sans-serif";
+  ctx.fillText("RMS / transient / noise", 12, 20);
+
+  tracks.forEach((track, index) => {
+    const y = topHeight + 10 + index * rowHeight;
+    ctx.fillStyle = index % 2 === 0 ? "rgba(255,255,255,0.035)" : "rgba(255,255,255,0.015)";
+    ctx.fillRect(0, y, width, rowHeight - 2);
+    ctx.fillStyle = "#8f99ad";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(`${track.role} ${track.chip}${track.channel}`, 10, y + 12);
+
+    ctx.fillStyle = trackColor(track.role);
+    for (const event of track.events) {
+      const start = Math.floor(((event.start_frame || 0) / totalFrames) * width);
+      const end = Math.max(
+        start + 2,
+        Math.floor((((event.start_frame || 0) + (event.frames || 1)) / totalFrames) * width),
+      );
+      const velocity = clamp01(event.velocity);
+      const noteY = y + 3 + Math.round((1 - velocity) * Math.max(1, rowHeight - 9));
+      ctx.globalAlpha = 0.35 + velocity * 0.65;
+      ctx.fillRect(start, noteY, end - start, Math.max(3, Math.round(rowHeight * 0.32)));
+      ctx.globalAlpha = 1;
+    }
+  });
+}
+
+function renderTrackSummary(renderPlan) {
+  const list = $("trackSummary");
+  list.innerHTML = "";
+  for (const track of collectTrackStats(renderPlan)) {
+    const card = document.createElement("article");
+    const title = document.createElement("strong");
+    title.textContent = `${track.role} · ${track.chip}${track.channel}`;
+    title.style.color = trackColor(track.role);
+    const meta = document.createElement("span");
+    meta.textContent = `${track.count} notes · avg ${track.avgVelocity.toFixed(2)}`;
+    card.append(title, meta);
+    list.appendChild(card);
+  }
+}
+
+function renderNoteInspector(renderPlan) {
+  const box = $("noteInspector");
+  box.innerHTML = "";
+  const notes = (renderPlan?.tracks || [])
+    .flatMap((track) =>
+      (track.events || []).map((event) => ({
+        role: track.role,
+        chip: track.chip,
+        channel: track.channel,
+        ...event,
+      })),
+    )
+    .sort((a, b) => (a.start_frame || 0) - (b.start_frame || 0))
+    .slice(0, 80);
+  for (const note of notes) {
+    const row = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = `${note.role} ${note.midi ?? "-"} ${Math.round(note.hz || 0)}Hz`;
+    title.style.color = trackColor(note.role);
+    const meta = document.createElement("span");
+    meta.textContent = `${compactTime(note.start_frame || 0, renderPlan?.hop, renderPlan?.sample_rate)} · ${note.frames || 0}f · v${Number(note.velocity || 0).toFixed(2)}`;
+    row.append(title, meta);
+    box.appendChild(row);
+  }
+}
+
+function renderDebugMeta(report, renderPlan) {
+  const tracks = collectTrackStats(renderPlan);
+  const fmNotes = tracks
+    .filter((track) => track.chip === "ym2612")
+    .reduce((sum, track) => sum + track.count, 0);
+  const psgNotes = tracks
+    .filter((track) => track.chip === "psg")
+    .reduce((sum, track) => sum + track.count, 0);
+  $("debugMeta").innerHTML = [
+    ["Grid", report?.grid_frames ?? renderPlan?.tempo?.grid_frames ?? "-"],
+    ["Offset", report?.grid_offset_frame ?? renderPlan?.tempo?.grid_offset_frame ?? "-"],
+    ["FM Notes", fmNotes],
+    ["PSG Notes", psgNotes],
+  ]
+    .map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`)
+    .join("");
+}
+
+async function loadDebug() {
+  if (!state.summary?.arrangement || !state.summary?.render_plan) {
+    clearDebug();
+    return;
+  }
+  $("reloadDebugBtn").disabled = true;
+  try {
+    const [arrangement, renderPlan, report] = await Promise.all([
+      readJson(state.summary.arrangement),
+      readJson(state.summary.render_plan),
+      readJson(state.summary.preview_report).catch(() => null),
+    ]);
+    state.debug = { arrangement, renderPlan, report };
+    renderDebugMeta(report, renderPlan);
+    drawDebugCanvas(arrangement, renderPlan);
+    renderTrackSummary(renderPlan);
+    renderNoteInspector(renderPlan);
+  } catch (err) {
+    clearDebug("Debug load failed.");
+    setLog(`Debug load failed:\n${err}`);
+  } finally {
+    $("reloadDebugBtn").disabled = !(state.summary?.arrangement && state.summary?.render_plan);
   }
 }
 
@@ -432,6 +660,7 @@ $("loadRuntimeBtn").addEventListener("click", loadRuntime);
 $("loadArrangementBtn").addEventListener("click", loadArrangement);
 $("loadNoteBtn").addEventListener("click", loadNote);
 $("previewInstrumentBtn").addEventListener("click", previewInstrument);
+$("reloadDebugBtn").addEventListener("click", loadDebug);
 $("previewPreset").addEventListener("change", async () => {
   const preset = $("previewPreset").value;
   if (presetValues[preset]) {
@@ -452,5 +681,6 @@ for (const id of ["bassGain", "leadGain", "psgGain", "dacGain"]) {
 setOutput(state.output);
 setSummary(null);
 setBank(null);
+clearDebug();
 applyMixControls(presetValues.balanced, "balanced");
 loadSettings();
