@@ -101,7 +101,9 @@ installed.
    also synthesizes drum events from low-note/onset accents plus a 16th-note
    grid so AI Preview is no longer rhythmically empty. The preview renderer
    keeps PSG noise low and mixes deterministic PCM-style kick/snare/hat fallback
-   samples when no DAC chunk is available.
+   samples when no DAC chunk is available. When `dac_chunks.json` exists in the
+   bundle, AI and Hybrid previews classify those chunks into a small kick/snare/
+   hat palette and attach real DAC sample paths to generated drum events.
 9. In progress: use `Preview source` in the UI to choose `Rust`, `AI`, or
    `Hybrid`. `Hybrid` keeps Rust bass/drums/PSG and replaces Rust lead-style
    notes with selected Basic Pitch pad/chord/lead/counter notes. Hybrid also

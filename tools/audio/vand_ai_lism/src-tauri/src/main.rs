@@ -350,6 +350,31 @@ struct VandAiNoteEvent {
     velocity: f32,
 }
 
+#[derive(Clone, Deserialize)]
+struct DacChunkManifest {
+    #[serde(default)]
+    chunks: Vec<DacChunkEntry>,
+}
+
+#[derive(Clone, Deserialize)]
+struct DacChunkEntry {
+    id: usize,
+    path: String,
+    #[serde(default)]
+    peak: f32,
+    #[serde(default)]
+    rms: f32,
+    #[serde(default)]
+    sample_count: usize,
+}
+
+#[derive(Clone)]
+struct DacDrumPalette {
+    kick: DacChunkEntry,
+    snare: DacChunkEntry,
+    hat: DacChunkEntry,
+}
+
 fn default_sample_rate() -> u32 {
     44_100
 }
@@ -927,6 +952,120 @@ fn make_psg_drum(start_frame: usize, velocity: f32, noise_amp: f32) -> VandDrumE
         instrument_id: DEFAULT_NOISE_INSTRUMENT.to_string(),
         dac_chunk: None,
         dac_path: String::new(),
+    }
+}
+
+fn chunk_zero_crossing_ratio(path: &Path) -> f32 {
+    let Ok(bytes) = fs::read(path) else {
+        return 0.0;
+    };
+    if bytes.len() < 2 {
+        return 0.0;
+    }
+    let mut crossings = 0usize;
+    let mut prev = bytes[0] as i16 - 128;
+    for byte in bytes.iter().skip(1) {
+        let current = *byte as i16 - 128;
+        if (prev < 0 && current >= 0) || (prev >= 0 && current < 0) {
+            crossings += 1;
+        }
+        prev = current;
+    }
+    crossings as f32 / (bytes.len() - 1) as f32
+}
+
+fn find_bundle_dir(reference_path: &Path) -> Option<PathBuf> {
+    let mut current = reference_path.parent();
+    while let Some(dir) = current {
+        if dir.join("dac_chunks.json").exists() {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+fn load_dac_drum_palette(reference_path: &Path) -> Option<DacDrumPalette> {
+    let bundle_dir = find_bundle_dir(reference_path)?;
+    let text = fs::read_to_string(bundle_dir.join("dac_chunks.json")).ok()?;
+    let manifest: DacChunkManifest = serde_json::from_str(&text).ok()?;
+    if manifest.chunks.is_empty() {
+        return None;
+    }
+
+    let mut scored = manifest
+        .chunks
+        .into_iter()
+        .map(|chunk| {
+            let path = resolve_existing_path(Path::new(""), &bundle_dir, &chunk.path);
+            let zero_cross = chunk_zero_crossing_ratio(&path);
+            (chunk, path, zero_cross)
+        })
+        .collect::<Vec<_>>();
+    scored.retain(|(_, path, _)| path.exists());
+    if scored.is_empty() {
+        return None;
+    }
+
+    let mut kick: Option<(DacChunkEntry, PathBuf, f32, f32)> = None;
+    let mut snare: Option<(DacChunkEntry, PathBuf, f32, f32)> = None;
+    let mut hat: Option<(DacChunkEntry, PathBuf, f32, f32)> = None;
+    for (chunk, path, zero_cross) in scored {
+        let length = chunk.sample_count.max(1) as f32;
+        let punch = chunk.peak * 0.58 + chunk.rms * 1.24;
+        let kick_score = punch - zero_cross * 0.75 + (length / 480.0).min(1.0) * 0.16;
+        let snare_score = chunk.rms * 1.35 + zero_cross * 0.26 + chunk.peak * 0.25;
+        let hat_score = zero_cross * 1.45 + (1.0 - (length / 420.0).min(1.0)) * 0.36;
+        if kick
+            .as_ref()
+            .is_none_or(|(_, _, _, best)| kick_score > *best)
+        {
+            kick = Some((chunk.clone(), path.clone(), zero_cross, kick_score));
+        }
+        if snare
+            .as_ref()
+            .is_none_or(|(_, _, _, best)| snare_score > *best)
+        {
+            snare = Some((chunk.clone(), path.clone(), zero_cross, snare_score));
+        }
+        if hat.as_ref().is_none_or(|(_, _, _, best)| hat_score > *best) {
+            hat = Some((chunk, path, zero_cross, hat_score));
+        }
+    }
+
+    let mut kick = kick?.0;
+    let mut snare = snare?.0;
+    let mut hat = hat?.0;
+    kick.path = resolve_existing_path(Path::new(""), &bundle_dir, &kick.path)
+        .display()
+        .to_string();
+    snare.path = resolve_existing_path(Path::new(""), &bundle_dir, &snare.path)
+        .display()
+        .to_string();
+    hat.path = resolve_existing_path(Path::new(""), &bundle_dir, &hat.path)
+        .display()
+        .to_string();
+    Some(DacDrumPalette { kick, snare, hat })
+}
+
+fn assign_dac_drum_samples(arrangement: &mut VandNoteArrangement, reference_path: &Path) {
+    let Some(palette) = load_dac_drum_palette(reference_path) else {
+        return;
+    };
+    for drum in &mut arrangement.drums {
+        if drum.dac_chunk.is_some() && !drum.dac_path.is_empty() {
+            continue;
+        }
+        let entry = if drum.velocity >= 0.62 && drum.noise_amp < drum.velocity * 0.62 {
+            &palette.kick
+        } else if drum.velocity >= 0.58 {
+            &palette.snare
+        } else {
+            &palette.hat
+        };
+        drum.dac_chunk = Some(entry.id);
+        drum.dac_path = entry.path.clone();
+        drum.noise_amp *= 0.45;
     }
 }
 
@@ -2525,7 +2664,8 @@ async fn ai_note_preview_data_url(
         } else {
             bank_path.clone()
         };
-        let arrangement = ai_notes_to_note_arrangement(&ai_notes, instrument_bank);
+        let mut arrangement = ai_notes_to_note_arrangement(&ai_notes, instrument_bank);
+        assign_dac_drum_samples(&mut arrangement, &ai_notes_path);
         let instruments = load_instrument_bank_for_note_arrangement(
             &repo,
             &ai_notes_path,
@@ -2537,7 +2677,7 @@ async fn ai_note_preview_data_url(
             bass_gain: 0.0,
             lead_gain: lead_gain.clamp(0.0, 2.0),
             psg_gain: 1.0,
-            dac_gain: 0.0,
+            dac_gain: 1.0,
         };
         let mut samples =
             render_note_arrangement_samples(&arrangement, &instruments, arrangement_dir, mix);
@@ -2583,7 +2723,8 @@ async fn hybrid_note_preview_data_url(
         } else {
             bank_path.clone()
         };
-        let arrangement = merge_hybrid_note_arrangement(base, &ai_notes, instrument_bank);
+        let mut arrangement = merge_hybrid_note_arrangement(base, &ai_notes, instrument_bank);
+        assign_dac_drum_samples(&mut arrangement, &arrangement_path);
         let instruments = load_instrument_bank_for_note_arrangement(
             &repo,
             &arrangement_path,
@@ -3032,6 +3173,73 @@ mod tests {
             RenderMix::default(),
         );
         assert!(samples.iter().any(|sample| *sample != 0));
+    }
+
+    #[test]
+    fn assigns_bundle_dac_chunks_to_generated_ai_drums() {
+        let dir = std::env::temp_dir().join("vand-ai-lism-dac-palette-test");
+        fs::create_dir_all(dir.join("dac_chunks")).expect("temp chunk dir");
+        fs::write(
+            dir.join("dac_chunks/kick.u8"),
+            [128u8, 210, 245, 180, 130, 110, 120],
+        )
+        .expect("kick");
+        fs::write(
+            dir.join("dac_chunks/snare.u8"),
+            [128u8, 250, 12, 230, 30, 210, 40, 128],
+        )
+        .expect("snare");
+        fs::write(
+            dir.join("dac_chunks/hat.u8"),
+            [128u8, 220, 40, 216, 38, 128],
+        )
+        .expect("hat");
+        fs::write(
+            dir.join("dac_chunks.json"),
+            r#"{
+  "chunks": [
+    {"id": 0, "path": "dac_chunks/kick.u8", "sample_count": 7, "peak": 0.60, "rms": 0.22},
+    {"id": 1, "path": "dac_chunks/snare.u8", "sample_count": 8, "peak": 0.90, "rms": 0.35},
+    {"id": 2, "path": "dac_chunks/hat.u8", "sample_count": 6, "peak": 0.44, "rms": 0.16}
+  ]
+}"#,
+        )
+        .expect("manifest");
+        let reference = dir.join("ai/basic_pitch/ai_notes.vand-ai-notes.json");
+        fs::create_dir_all(reference.parent().unwrap()).expect("ai dir");
+        fs::write(&reference, "{}").expect("reference");
+
+        let mut arrangement = VandNoteArrangement {
+            sample_rate: 44_100,
+            hop: 512,
+            total_frames: 64,
+            instrument_bank: DEFAULT_INSTRUMENT_BANK.to_string(),
+            notes: Vec::new(),
+            drums: vec![
+                make_psg_drum(0, 0.90, 0.20),
+                make_psg_drum(12, 0.75, 0.70),
+                make_psg_drum(24, 0.22, 0.16),
+            ],
+        };
+        assign_dac_drum_samples(&mut arrangement, &reference);
+        assert!(
+            arrangement
+                .drums
+                .iter()
+                .all(|drum| drum.dac_chunk.is_some() && !drum.dac_path.is_empty())
+        );
+        assert!(
+            arrangement
+                .drums
+                .iter()
+                .any(|drum| drum.dac_path.ends_with("kick.u8"))
+        );
+        assert!(
+            arrangement
+                .drums
+                .iter()
+                .any(|drum| drum.dac_path.ends_with("snare.u8"))
+        );
     }
 
     #[test]

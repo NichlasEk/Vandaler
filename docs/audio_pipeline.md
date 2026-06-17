@@ -178,7 +178,9 @@ low-note/onset accents plus a 16th-note grid; Hybrid merges that with the Rust
 drum events to make previews more rhythmically active. Program previews do not
 leave generated drums as raw PSG noise: the renderer now keeps PSG noise low and
 mixes a deterministic PCM-style kick/snare/hat fallback whenever no DAC chunk is
-available.
+available. If a bundle has `dac_chunks.json`, AI and Hybrid previews first build
+a small kick/snare/hat palette from those chunks and attach real DAC sample paths
+to generated drum events before falling back to synthetic preview drums.
 
 See `docs/ai_music_model_inventory.md` for the current online model/tool
 inventory and the planned order of integration. To create the local tool venv,
