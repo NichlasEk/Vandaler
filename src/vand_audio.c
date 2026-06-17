@@ -6,6 +6,11 @@
 #define VAND_AUDIO_FM_CHORD_CH 3
 #define VAND_AUDIO_FM_COUNTER_CH 4
 #define VAND_AUDIO_FM_CHANNELS 5
+#define VAND_AUDIO_ROLE_BASS 0
+#define VAND_AUDIO_ROLE_LEAD 1
+#define VAND_AUDIO_ROLE_PAD 2
+#define VAND_AUDIO_ROLE_CHORD 3
+#define VAND_AUDIO_ROLE_COUNTER 4
 #define VAND_AUDIO_FM_KEY_ALL 0xF0
 #define VAND_AUDIO_DAC_NONE 255
 #define VAND_AUDIO_DAC_DEFAULT_RATE 8000
@@ -25,6 +30,71 @@ static u8 dacLevel = 0;
 static u16 fmCurrentFnum[VAND_AUDIO_FM_CHANNELS] = {0, 0, 0, 0, 0};
 static u8 fmCurrentBlock[VAND_AUDIO_FM_CHANNELS] = {0, 0, 0, 0, 0};
 static u8 fmCurrentLevel[VAND_AUDIO_FM_CHANNELS] = {0, 0, 0, 0, 0};
+static const u8 fmRoleForChannel[VAND_AUDIO_FM_CHANNELS] = {
+    VAND_AUDIO_ROLE_BASS,
+    VAND_AUDIO_ROLE_LEAD,
+    VAND_AUDIO_ROLE_PAD,
+    VAND_AUDIO_ROLE_CHORD,
+    VAND_AUDIO_ROLE_COUNTER
+};
+static const u8 fmAlgorithm[VAND_AUDIO_FM_CHANNELS] = {0x33, 0x37, 0x34, 0x35, 0x36};
+static const u8 fmFeedbackStereo[VAND_AUDIO_FM_CHANNELS] = {0xC0, 0xC0, 0xC0, 0xC0, 0xC0};
+static const u8 fmDetuneMul[VAND_AUDIO_FM_CHANNELS][4] = {
+    {0x01, 0x02, 0x01, 0x01},
+    {0x32, 0x11, 0x04, 0x01},
+    {0x22, 0x31, 0x12, 0x01},
+    {0x21, 0x42, 0x11, 0x01},
+    {0x13, 0x02, 0x22, 0x01}
+};
+static const u8 fmAttack[VAND_AUDIO_FM_CHANNELS][4] = {
+    {0x1F, 0x18, 0x14, 0x16},
+    {0x1F, 0x1D, 0x1A, 0x1F},
+    {0x16, 0x14, 0x12, 0x15},
+    {0x1A, 0x16, 0x13, 0x18},
+    {0x1F, 0x1C, 0x14, 0x1E}
+};
+static const u8 fmDecay[VAND_AUDIO_FM_CHANNELS][4] = {
+    {0x05, 0x05, 0x05, 0x05},
+    {0x06, 0x08, 0x05, 0x07},
+    {0x03, 0x04, 0x03, 0x04},
+    {0x04, 0x06, 0x04, 0x05},
+    {0x0A, 0x08, 0x05, 0x09}
+};
+static const u8 fmSustainRate[VAND_AUDIO_FM_CHANNELS][4] = {
+    {0x02, 0x02, 0x02, 0x02},
+    {0x02, 0x03, 0x02, 0x02},
+    {0x01, 0x01, 0x01, 0x01},
+    {0x02, 0x02, 0x01, 0x02},
+    {0x04, 0x03, 0x02, 0x04}
+};
+static const u8 fmRelease[VAND_AUDIO_FM_CHANNELS][4] = {
+    {0x0F, 0x0F, 0x0F, 0x0F},
+    {0x07, 0x08, 0x08, 0x08},
+    {0x0A, 0x0A, 0x0B, 0x0A},
+    {0x09, 0x09, 0x0A, 0x09},
+    {0x06, 0x07, 0x07, 0x06}
+};
+static const u8 fmSustainLevel[VAND_AUDIO_FM_CHANNELS][4] = {
+    {0x08, 0x0A, 0x0C, 0x08},
+    {0x03, 0x05, 0x05, 0x02},
+    {0x0A, 0x0B, 0x0D, 0x08},
+    {0x08, 0x0A, 0x0C, 0x07},
+    {0x02, 0x05, 0x08, 0x03}
+};
+static const u8 fmBaseTl[VAND_AUDIO_FM_CHANNELS][4] = {
+    {78, 78, 78, 127},
+    {36, 48, 58, 127},
+    {72, 80, 88, 127},
+    {62, 70, 82, 127},
+    {44, 58, 76, 127}
+};
+static const u8 fmLevelScale[VAND_AUDIO_FM_CHANNELS][4] = {
+    {2, 2, 2, 8},
+    {2, 3, 4, 8},
+    {1, 1, 2, 6},
+    {1, 2, 2, 6},
+    {2, 3, 3, 8}
+};
 
 static u8 ymPart(u8 channel)
 {
@@ -57,40 +127,42 @@ static void ymSetFrequency(u8 channel, u16 fnum, u8 block)
 static void ymSetLevel(u8 channel, u8 level)
 {
     const u8 clamped = level > 15 ? 15 : level;
-    const u8 carrierTl = 127 - (clamped * 8);
-    const u8 modTl = clamped > 0 ? 72 - (clamped * 3) : 112;
     const u8 part = ymPart(channel);
     const u8 slot = ymSlot(channel);
-
-    YM2612_writeReg(part, 0x40 + slot, modTl);
-    YM2612_writeReg(part, 0x44 + slot, modTl);
-    YM2612_writeReg(part, 0x48 + slot, modTl);
-    YM2612_writeReg(part, 0x4C + slot, carrierTl);
-}
-
-static void ymInitVoice(u8 channel, bool bass)
-{
-    const u8 detuneMul[4] = {bass ? 0x01 : 0x02, bass ? 0x02 : 0x03, 0x01, 0x01};
-    const u8 rates[4] = {0x1F, bass ? 0x18 : 0x12, bass ? 0x14 : 0x10, bass ? 0x16 : 0x14};
-    const u8 release[4] = {0x0F, 0x0F, 0x0F, 0x0F};
-    const u8 sustain[4] = {0x08, 0x0A, 0x0C, 0x08};
+    const u8 role = fmRoleForChannel[channel];
     const u8 offsets[4] = {0x00, 0x04, 0x08, 0x0C};
-    const u8 part = ymPart(channel);
-    const u8 slot = ymSlot(channel);
     u8 op;
-
-    YM2612_writeReg(part, 0xB0 + slot, bass ? 0x33 : 0x37);
-    YM2612_writeReg(part, 0xB4 + slot, 0xC0);
 
     for (op = 0; op < 4; op++)
     {
         const u8 reg = offsets[op] + slot;
-        YM2612_writeReg(part, 0x30 + reg, detuneMul[op]);
-        YM2612_writeReg(part, 0x50 + reg, rates[op]);
-        YM2612_writeReg(part, 0x60 + reg, 0x05);
-        YM2612_writeReg(part, 0x70 + reg, 0x02);
-        YM2612_writeReg(part, 0x80 + reg, release[op]);
-        YM2612_writeReg(part, 0x90 + reg, sustain[op]);
+        const u8 baseTl = fmBaseTl[role][op];
+        const u8 scale = fmLevelScale[role][op];
+        const u8 tl = clamped == 0 ? 127 : (baseTl > clamped * scale ? baseTl - clamped * scale : 0);
+        YM2612_writeReg(part, 0x40 + reg, tl);
+    }
+}
+
+static void ymInitVoice(u8 channel)
+{
+    const u8 offsets[4] = {0x00, 0x04, 0x08, 0x0C};
+    const u8 part = ymPart(channel);
+    const u8 slot = ymSlot(channel);
+    const u8 role = fmRoleForChannel[channel];
+    u8 op;
+
+    YM2612_writeReg(part, 0xB0 + slot, fmAlgorithm[role]);
+    YM2612_writeReg(part, 0xB4 + slot, fmFeedbackStereo[role]);
+
+    for (op = 0; op < 4; op++)
+    {
+        const u8 reg = offsets[op] + slot;
+        YM2612_writeReg(part, 0x30 + reg, fmDetuneMul[role][op]);
+        YM2612_writeReg(part, 0x50 + reg, fmAttack[role][op]);
+        YM2612_writeReg(part, 0x60 + reg, fmDecay[role][op]);
+        YM2612_writeReg(part, 0x70 + reg, fmSustainRate[role][op]);
+        YM2612_writeReg(part, 0x80 + reg, fmRelease[role][op]);
+        YM2612_writeReg(part, 0x90 + reg, fmSustainLevel[role][op]);
     }
 
     ymSetLevel(channel, 0);
@@ -223,11 +295,11 @@ void VandAudio_init(void)
     YM2612_writeReg(0, 0x27, 0x00);
     YM2612_writeReg(0, 0x2B, 0x80);
     YM2612_writeReg(0, 0x2A, 0x80);
-    ymInitVoice(VAND_AUDIO_FM_BASS_CH, TRUE);
-    ymInitVoice(VAND_AUDIO_FM_LEAD_CH, FALSE);
-    ymInitVoice(VAND_AUDIO_FM_PAD_CH, FALSE);
-    ymInitVoice(VAND_AUDIO_FM_CHORD_CH, FALSE);
-    ymInitVoice(VAND_AUDIO_FM_COUNTER_CH, FALSE);
+    ymInitVoice(VAND_AUDIO_FM_BASS_CH);
+    ymInitVoice(VAND_AUDIO_FM_LEAD_CH);
+    ymInitVoice(VAND_AUDIO_FM_PAD_CH);
+    ymInitVoice(VAND_AUDIO_FM_CHORD_CH);
+    ymInitVoice(VAND_AUDIO_FM_COUNTER_CH);
     for (u8 i = 0; i < VAND_AUDIO_FM_CHANNELS; i++)
     {
         fmCurrentFnum[i] = 0;
