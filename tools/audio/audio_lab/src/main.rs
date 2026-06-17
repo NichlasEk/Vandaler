@@ -2419,6 +2419,210 @@ fn build_runtime_events_from_render_plan(
     out
 }
 
+struct RuntimeArrangement<'a> {
+    context: &'a MusicalContext,
+    bass_notes: Vec<NoteEvent>,
+    lead_notes: Vec<NoteEvent>,
+    pad_notes: Vec<NoteEvent>,
+    chord_notes: Vec<NoteEvent>,
+    counter_notes: Vec<NoteEvent>,
+    psg_lead_notes: Vec<NoteEvent>,
+    psg_counter_notes: Vec<NoteEvent>,
+    psg_bass_notes: Vec<NoteEvent>,
+    drum_events: Vec<DrumEvent>,
+}
+
+fn bar_index_for_frame(frame: usize, context: &MusicalContext) -> usize {
+    let bar_frames = (context.frames_per_beat * 4.0).round().max(16.0) as usize;
+    frame
+        .saturating_sub(context.grid_offset_frame)
+        .saturating_div(bar_frames.max(1))
+}
+
+fn section_gain(role: &str, bar_index: usize) -> f32 {
+    let section_bar = bar_index % 16;
+    match role {
+        "bass" => {
+            if section_bar < 4 {
+                0.82
+            } else if section_bar >= 12 {
+                1.08
+            } else {
+                1.0
+            }
+        }
+        "lead" => {
+            if section_bar < 4 {
+                0.0
+            } else if section_bar < 8 {
+                0.78
+            } else {
+                1.18
+            }
+        }
+        "pad" => {
+            if section_bar < 4 {
+                0.72
+            } else if section_bar < 8 {
+                0.95
+            } else {
+                0.62
+            }
+        }
+        "chord" => {
+            if section_bar < 4 {
+                0.0
+            } else if section_bar < 12 {
+                0.78
+            } else {
+                0.92
+            }
+        }
+        "counter" => {
+            if section_bar < 8 {
+                0.0
+            } else if section_bar < 12 {
+                0.72
+            } else {
+                1.0
+            }
+        }
+        "psg_lead" => {
+            if section_bar < 4 {
+                0.0
+            } else if section_bar < 8 {
+                0.45
+            } else {
+                0.92
+            }
+        }
+        "psg_counter" => {
+            if section_bar < 8 {
+                0.0
+            } else if section_bar < 12 {
+                0.52
+            } else {
+                0.85
+            }
+        }
+        "psg_bass" => {
+            if section_bar < 4 {
+                0.0
+            } else {
+                0.78
+            }
+        }
+        _ => 1.0,
+    }
+}
+
+fn arrange_note_layer(
+    notes: Vec<NoteEvent>,
+    context: &MusicalContext,
+    role: &'static str,
+) -> Vec<NoteEvent> {
+    notes
+        .into_iter()
+        .filter_map(|mut note| {
+            let gain = section_gain(role, bar_index_for_frame(note.start_frame, context));
+            if gain <= 0.0 {
+                return None;
+            }
+            note.velocity = (note.velocity * gain).clamp(0.04, 0.95);
+            if gain < 0.8 && note.velocity < 0.08 {
+                return None;
+            }
+            Some(note)
+        })
+        .collect()
+}
+
+fn arrange_drum_patterns(mut drums: Vec<DrumEvent>, context: &MusicalContext) -> Vec<DrumEvent> {
+    let bar_frames = (context.frames_per_beat * 4.0).round().max(16.0) as usize;
+    let step_frames = (context.frames_per_beat * 0.25).round().max(3.0) as usize;
+    let fill_seed = drums.iter().find(|drum| drum.dac_chunk.is_some()).cloned();
+
+    for drum in &mut drums {
+        let bar = bar_index_for_frame(drum.start_frame, context);
+        let section_bar = bar % 16;
+        let gain = if section_bar < 4 {
+            if drum.kind == "hat" { 0.0 } else { 0.62 }
+        } else if section_bar < 8 {
+            0.86
+        } else if section_bar == 15 {
+            1.18
+        } else {
+            1.0
+        };
+        drum.velocity = (drum.velocity * gain).clamp(0.0, 0.98);
+        drum.noise_amp = (drum.noise_amp * gain).clamp(0.0, 0.95);
+    }
+    drums.retain(|drum| drum.velocity >= 0.12);
+
+    if let Some(seed) = fill_seed {
+        let mut bar_start = context.grid_offset_frame;
+        while bar_start < context.loop_end_frame {
+            let bar = bar_index_for_frame(bar_start, context);
+            if bar % 16 == 15 || bar % 16 == 7 {
+                let fill_start = bar_start.saturating_add(bar_frames / 2);
+                for step in 0..4usize {
+                    let start_frame = fill_start.saturating_add(step * step_frames * 2);
+                    if start_frame >= context.loop_end_frame {
+                        continue;
+                    }
+                    let already_hit = drums.iter().any(|drum| {
+                        drum.start_frame.abs_diff(start_frame) <= context.grid_frames.max(2)
+                    });
+                    if !already_hit {
+                        let mut fill = seed.clone();
+                        fill.start_frame = start_frame;
+                        fill.kind = if step % 2 == 0 {
+                            "fill_snare"
+                        } else {
+                            "fill_hat"
+                        };
+                        fill.velocity = if bar % 16 == 15 { 0.88 } else { 0.68 };
+                        fill.noise_amp = if step % 2 == 0 { 0.70 } else { 0.42 };
+                        drums.push(fill);
+                    }
+                }
+            }
+            bar_start = bar_start.saturating_add(bar_frames);
+        }
+    }
+
+    quantize_drum_events(drums, context)
+}
+
+fn arrange_runtime_patterns(mut arrangement: RuntimeArrangement<'_>) -> RuntimeArrangement<'_> {
+    arrangement.bass_notes =
+        arrange_note_layer(arrangement.bass_notes, arrangement.context, "bass");
+    arrangement.lead_notes =
+        arrange_note_layer(arrangement.lead_notes, arrangement.context, "lead");
+    arrangement.pad_notes = arrange_note_layer(arrangement.pad_notes, arrangement.context, "pad");
+    arrangement.chord_notes =
+        arrange_note_layer(arrangement.chord_notes, arrangement.context, "chord");
+    arrangement.counter_notes =
+        arrange_note_layer(arrangement.counter_notes, arrangement.context, "counter");
+    arrangement.psg_lead_notes = arrange_note_layer(
+        build_psg_lead_notes(&arrangement.lead_notes),
+        arrangement.context,
+        "psg_lead",
+    );
+    arrangement.psg_counter_notes = arrange_note_layer(
+        build_psg_counter_notes(&arrangement.counter_notes),
+        arrangement.context,
+        "psg_counter",
+    );
+    arrangement.psg_bass_notes = arrange_note_layer(
+        build_psg_bass_notes(&arrangement.bass_notes),
+        arrangement.context,
+        "psg_bass",
+    );
+    arrangement.drum_events = arrange_drum_patterns(arrangement.drum_events, arrangement.context);
+    arrangement
+}
+
 fn build_render_plan_runtime_events(
     frames: &[AnalysisFrame],
     sample_rate: u32,
@@ -2434,18 +2638,30 @@ fn build_render_plan_runtime_events(
     let psg_lead_notes = build_psg_lead_notes(&hook_notes);
     let psg_counter_notes = build_psg_counter_notes(&counter_notes);
     let psg_bass_notes = build_psg_bass_notes(&bass_notes);
+    let arrangement = arrange_runtime_patterns(RuntimeArrangement {
+        context: &context,
+        bass_notes,
+        lead_notes,
+        pad_notes,
+        chord_notes,
+        counter_notes,
+        psg_lead_notes,
+        psg_counter_notes,
+        psg_bass_notes,
+        drum_events,
+    });
     build_runtime_events_from_render_plan(
         sample_rate,
         context.loop_end_frame,
-        &bass_notes,
-        &lead_notes,
-        &pad_notes,
-        &chord_notes,
-        &counter_notes,
-        &psg_lead_notes,
-        &psg_counter_notes,
-        &psg_bass_notes,
-        &drum_events,
+        &arrangement.bass_notes,
+        &arrangement.lead_notes,
+        &arrangement.pad_notes,
+        &arrangement.chord_notes,
+        &arrangement.counter_notes,
+        &arrangement.psg_lead_notes,
+        &arrangement.psg_counter_notes,
+        &arrangement.psg_bass_notes,
+        &arrangement.drum_events,
     )
 }
 
@@ -2864,18 +3080,30 @@ fn build_runtime_events_with_optional_ai(
     let psg_lead_notes = build_psg_lead_notes(&hook_notes);
     let psg_counter_notes = build_psg_counter_notes(&counter_notes);
     let psg_bass_notes = build_psg_bass_notes(&bass_notes);
+    let arrangement = arrange_runtime_patterns(RuntimeArrangement {
+        context: &context,
+        bass_notes,
+        lead_notes,
+        pad_notes,
+        chord_notes,
+        counter_notes,
+        psg_lead_notes,
+        psg_counter_notes,
+        psg_bass_notes,
+        drum_events,
+    });
     build_runtime_events_from_render_plan(
         sample_rate,
         context.loop_end_frame,
-        &bass_notes,
-        &lead_notes,
-        &pad_notes,
-        &chord_notes,
-        &counter_notes,
-        &psg_lead_notes,
-        &psg_counter_notes,
-        &psg_bass_notes,
-        &drum_events,
+        &arrangement.bass_notes,
+        &arrangement.lead_notes,
+        &arrangement.pad_notes,
+        &arrangement.chord_notes,
+        &arrangement.counter_notes,
+        &arrangement.psg_lead_notes,
+        &arrangement.psg_counter_notes,
+        &arrangement.psg_bass_notes,
+        &arrangement.drum_events,
     )
 }
 
