@@ -423,6 +423,51 @@ audio {
   border: 1px solid rgba(241, 178, 74, 0.24);
   border-radius: 8px;
   background: #090b10;
+  cursor: crosshair;
+}
+
+.abControls {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 110px 110px auto auto auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.selectedNote,
+.abControls label {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 6px;
+  background: #111721;
+}
+
+.selectedNote {
+  min-height: 58px;
+  padding: 9px 10px;
+  color: #d9dfec;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.abControls label {
+  padding: 7px 8px;
+}
+
+.abControls label span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.abControls input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #f4f0e8;
+  font-weight: 800;
 }
 
 .trackSummary {
@@ -514,7 +559,8 @@ pre {
   .renderControls,
   .players,
   .stats,
-  .debugMeta {
+  .debugMeta,
+  .abControls {
     grid-template-columns: 1fr;
   }
 }

@@ -176,6 +176,20 @@
             <div><span>PSG Notes</span><strong>-</strong></div>
           </div>
           <canvas id="debugCanvas" width="1280" height="280"></canvas>
+          <div class="abControls">
+            <div class="selectedNote" id="selectedNote">No note selected.</div>
+            <label>
+              <span>Start</span>
+              <input id="abStart" type="number" min="0" step="0.01" value="0" />
+            </label>
+            <label>
+              <span>End</span>
+              <input id="abEnd" type="number" min="0" step="0.01" value="4" />
+            </label>
+            <button id="playOriginalRegionBtn" disabled>Original</button>
+            <button id="playPreviewRegionBtn" disabled>Preview</button>
+            <button id="playBothRegionBtn" disabled>A/B</button>
+          </div>
           <div id="trackSummary" class="trackSummary">No debug data.</div>
           <div id="noteInspector" class="noteInspector"></div>
         </section>

@@ -8,6 +8,9 @@ const state = {
   bankPath: "",
   selectedInstrument: null,
   debug: null,
+  debugHitboxes: [],
+  selectedDebugNote: null,
+  regionStopTimer: null,
   busyCount: 0,
   settingsLoaded: false,
   presets: {
@@ -54,6 +57,8 @@ function setSource(path) {
   $("sourcePath").textContent = state.source || "No file selected";
   $("analyseBtn").disabled = !state.source;
   $("loadOriginalBtn").disabled = !state.source;
+  $("originalPlayer").removeAttribute("src");
+  $("originalPlayer").load();
 }
 
 function setOutput(path) {
@@ -154,6 +159,10 @@ async function loadSettings() {
 
 function setSummary(summary) {
   state.summary = summary;
+  for (const id of ["dacPlayer", "arrangementPlayer", "notePlayer", "runtimePlayer"]) {
+    $(id).removeAttribute("src");
+    $(id).load();
+  }
   $("frames").textContent = summary ? summary.frames : "-";
   $("activeFrames").textContent = summary ? summary.active_frames : "-";
   $("runtimeEvents").textContent = summary ? summary.runtime_events : "-";
@@ -202,6 +211,8 @@ async function readJson(path) {
 
 function clearDebug(message = "No debug data.") {
   state.debug = null;
+  state.debugHitboxes = [];
+  state.selectedDebugNote = null;
   const canvas = $("debugCanvas");
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -212,6 +223,9 @@ function clearDebug(message = "No debug data.") {
   ctx.fillText(message, 28, 52);
   $("trackSummary").textContent = message;
   $("noteInspector").innerHTML = "";
+  $("selectedNote").textContent = "No note selected.";
+  setRegion(0, 4);
+  enableRegionButtons(false);
   $("debugMeta").innerHTML = [
     ["Grid", "-"],
     ["Offset", "-"],
@@ -244,6 +258,11 @@ function compactTime(frames, hop, sampleRate) {
   return `${((frames * hop) / sampleRate).toFixed(2)}s`;
 }
 
+function frameToSeconds(frames, hop, sampleRate) {
+  if (!sampleRate || !hop) return 0;
+  return (frames * hop) / sampleRate;
+}
+
 function collectTrackStats(renderPlan) {
   return (renderPlan?.tracks || []).map((track) => {
     const events = track.events || [];
@@ -273,6 +292,8 @@ function drawDebugCanvas(arrangement, renderPlan) {
   const totalFrames = Math.max(renderPlan?.total_frames || arrangement?.events?.length || 1, 1);
   const topHeight = 88;
   const rowHeight = Math.max(16, Math.floor((height - topHeight - 18) / Math.max(1, tracks.length)));
+  const selected = state.selectedDebugNote;
+  state.debugHitboxes = [];
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#090b10";
@@ -330,8 +351,90 @@ function drawDebugCanvas(arrangement, renderPlan) {
       ctx.globalAlpha = 0.35 + velocity * 0.65;
       ctx.fillRect(start, noteY, end - start, Math.max(3, Math.round(rowHeight * 0.32)));
       ctx.globalAlpha = 1;
+      if (
+        selected &&
+        selected.role === track.role &&
+        selected.channel === track.channel &&
+        selected.start_frame === event.start_frame &&
+        selected.midi === event.midi
+      ) {
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(start - 1, noteY - 2, end - start + 2, Math.max(6, Math.round(rowHeight * 0.38)));
+      }
+      state.debugHitboxes.push({
+        x1: start,
+        x2: end,
+        y1: y,
+        y2: y + rowHeight,
+        note: {
+          role: track.role,
+          chip: track.chip,
+          channel: track.channel,
+          ...event,
+        },
+      });
     }
   });
+}
+
+function setRegion(start, end) {
+  const safeStart = Math.max(0, Number(start) || 0);
+  const safeEnd = Math.max(safeStart + 0.15, Number(end) || safeStart + 4);
+  $("abStart").value = safeStart.toFixed(2);
+  $("abEnd").value = safeEnd.toFixed(2);
+}
+
+function setSelectedDebugNote(note) {
+  state.selectedDebugNote = note;
+  if (!note) {
+    $("selectedNote").textContent = "No note selected.";
+    return;
+  }
+  const plan = state.debug?.renderPlan;
+  const start = frameToSeconds(note.start_frame || 0, plan?.hop, plan?.sample_rate);
+  const end = frameToSeconds((note.start_frame || 0) + (note.frames || 1), plan?.hop, plan?.sample_rate);
+  setRegion(start, end);
+  $("selectedNote").textContent = [
+    `${note.role} ${note.chip}${note.channel}`,
+    `midi ${note.midi ?? "-"} · ${Math.round(note.hz || 0)}Hz · v${Number(note.velocity || 0).toFixed(2)}`,
+    `${start.toFixed(2)}-${end.toFixed(2)}s · ${note.frames || 0} frames`,
+  ].join("\n");
+  if (state.debug) drawDebugCanvas(state.debug.arrangement, state.debug.renderPlan);
+}
+
+function pickDebugNote(event) {
+  if (!state.debugHitboxes.length) return;
+  const canvas = $("debugCanvas");
+  const rect = canvas.getBoundingClientRect();
+  const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
+  const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
+  const hit = state.debugHitboxes
+    .filter((box) => x >= box.x1 && x <= box.x2 && y >= box.y1 && y <= box.y2)
+    .sort((a, b) => (a.x2 - a.x1) - (b.x2 - b.x1))[0];
+  if (hit) {
+    setSelectedDebugNote(hit.note);
+  }
+}
+
+function hoverDebugNote(event) {
+  const canvas = $("debugCanvas");
+  if (!state.debugHitboxes.length) {
+    canvas.title = "";
+    canvas.style.cursor = "crosshair";
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
+  const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
+  const hit = state.debugHitboxes.find((box) => x >= box.x1 && x <= box.x2 && y >= box.y1 && y <= box.y2);
+  if (!hit) {
+    canvas.title = "";
+    canvas.style.cursor = "crosshair";
+    return;
+  }
+  canvas.style.cursor = "pointer";
+  canvas.title = `${hit.note.role} midi ${hit.note.midi ?? "-"} ${Math.round(hit.note.hz || 0)}Hz`;
 }
 
 function renderTrackSummary(renderPlan) {
@@ -371,6 +474,7 @@ function renderNoteInspector(renderPlan) {
     const meta = document.createElement("span");
     meta.textContent = `${compactTime(note.start_frame || 0, renderPlan?.hop, renderPlan?.sample_rate)} · ${note.frames || 0}f · v${Number(note.velocity || 0).toFixed(2)}`;
     row.append(title, meta);
+    row.addEventListener("click", () => setSelectedDebugNote(note));
     box.appendChild(row);
   }
 }
@@ -406,15 +510,23 @@ async function loadDebug() {
       readJson(state.summary.preview_report).catch(() => null),
     ]);
     state.debug = { arrangement, renderPlan, report };
+    state.selectedDebugNote = null;
     renderDebugMeta(report, renderPlan);
     drawDebugCanvas(arrangement, renderPlan);
     renderTrackSummary(renderPlan);
     renderNoteInspector(renderPlan);
+    enableRegionButtons(true);
   } catch (err) {
     clearDebug("Debug load failed.");
     setLog(`Debug load failed:\n${err}`);
   } finally {
     $("reloadDebugBtn").disabled = !(state.summary?.arrangement && state.summary?.render_plan);
+  }
+}
+
+function enableRegionButtons(enabled) {
+  for (const id of ["playOriginalRegionBtn", "playPreviewRegionBtn", "playBothRegionBtn"]) {
+    $(id).disabled = !enabled;
   }
 }
 
@@ -584,6 +696,82 @@ async function loadPlayer(playerId, path, label, progressId = "", buttonId = "")
   }
 }
 
+async function ensureOriginalLoaded() {
+  const player = $("originalPlayer");
+  if (!state.source) throw new Error("No original source selected.");
+  if (!player.src) {
+    player.src = await invoke("audio_data_url", { path: state.source });
+  }
+  return player;
+}
+
+async function ensureNoteLoaded() {
+  const player = $("notePlayer");
+  const previewPath = state.summary?.render_plan || state.summary?.note_arrangement;
+  if (!previewPath) throw new Error("No note preview available.");
+  if (!player.src) {
+    player.src = await invoke("note_preview_data_url", {
+      path: previewPath,
+      bankPath: state.bankPath || "",
+      ...readMixControls(),
+    });
+  }
+  return player;
+}
+
+function stopRegionPlayback() {
+  if (state.regionStopTimer) {
+    window.clearTimeout(state.regionStopTimer);
+    state.regionStopTimer = null;
+  }
+}
+
+async function playRegion(players) {
+  stopRegionPlayback();
+  const start = Math.max(0, Number($("abStart").value) || 0);
+  const end = Math.max(start + 0.15, Number($("abEnd").value) || start + 4);
+  for (const player of players) {
+    player.pause();
+    player.currentTime = Math.min(start, Number.isFinite(player.duration) ? player.duration : start);
+  }
+  await Promise.all(players.map((player) => player.play()));
+  state.regionStopTimer = window.setTimeout(() => {
+    for (const player of players) player.pause();
+    state.regionStopTimer = null;
+  }, Math.max(150, (end - start) * 1000));
+}
+
+async function playOriginalRegion() {
+  try {
+    const player = await ensureOriginalLoaded();
+    await playRegion([player]);
+    setLog(`Playing original region ${$("abStart").value}-${$("abEnd").value}s`);
+  } catch (err) {
+    setLog(`Original region failed:\n${err}`);
+  }
+}
+
+async function playPreviewRegion() {
+  try {
+    const player = await ensureNoteLoaded();
+    await playRegion([player]);
+    setLog(`Playing note preview region ${$("abStart").value}-${$("abEnd").value}s`);
+  } catch (err) {
+    setLog(`Preview region failed:\n${err}`);
+  }
+}
+
+async function playBothRegion() {
+  try {
+    const original = await ensureOriginalLoaded();
+    const preview = await ensureNoteLoaded();
+    await playRegion([original, preview]);
+    setLog(`Playing A/B region ${$("abStart").value}-${$("abEnd").value}s`);
+  } catch (err) {
+    setLog(`A/B region failed:\n${err}`);
+  }
+}
+
 function loadOriginal() {
   if (!state.source) return;
   loadPlayer("originalPlayer", state.source, "original");
@@ -661,6 +849,11 @@ $("loadArrangementBtn").addEventListener("click", loadArrangement);
 $("loadNoteBtn").addEventListener("click", loadNote);
 $("previewInstrumentBtn").addEventListener("click", previewInstrument);
 $("reloadDebugBtn").addEventListener("click", loadDebug);
+$("debugCanvas").addEventListener("click", pickDebugNote);
+$("debugCanvas").addEventListener("mousemove", hoverDebugNote);
+$("playOriginalRegionBtn").addEventListener("click", playOriginalRegion);
+$("playPreviewRegionBtn").addEventListener("click", playPreviewRegion);
+$("playBothRegionBtn").addEventListener("click", playBothRegion);
 $("previewPreset").addEventListener("change", async () => {
   const preset = $("previewPreset").value;
   if (presetValues[preset]) {
