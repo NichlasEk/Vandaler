@@ -2430,6 +2430,7 @@ struct RuntimeArrangement<'a> {
     psg_counter_notes: Vec<NoteEvent>,
     psg_bass_notes: Vec<NoteEvent>,
     drum_events: Vec<DrumEvent>,
+    dac_chunks: &'a [DacChunk],
 }
 
 fn bar_index_for_frame(frame: usize, context: &MusicalContext) -> usize {
@@ -2537,7 +2538,11 @@ fn arrange_note_layer(
         .collect()
 }
 
-fn arrange_drum_patterns(mut drums: Vec<DrumEvent>, context: &MusicalContext) -> Vec<DrumEvent> {
+fn arrange_drum_patterns(
+    mut drums: Vec<DrumEvent>,
+    chunks: &[DacChunk],
+    context: &MusicalContext,
+) -> Vec<DrumEvent> {
     let bar_frames = (context.frames_per_beat * 4.0).round().max(16.0) as usize;
     let step_frames = (context.frames_per_beat * 0.25).round().max(3.0) as usize;
     let fill_seed = drums.iter().find(|drum| drum.dac_chunk.is_some()).cloned();
@@ -2563,6 +2568,28 @@ fn arrange_drum_patterns(mut drums: Vec<DrumEvent>, context: &MusicalContext) ->
         let mut bar_start = context.grid_offset_frame;
         while bar_start < context.loop_end_frame {
             let bar = bar_index_for_frame(bar_start, context);
+            if bar % 16 >= 8 {
+                for step in [1usize, 3, 5, 7, 9, 11, 13, 15] {
+                    let start_frame = bar_start.saturating_add(step * step_frames);
+                    if start_frame >= context.loop_end_frame {
+                        continue;
+                    }
+                    let already_hit = drums.iter().any(|drum| {
+                        drum.start_frame.abs_diff(start_frame) <= context.grid_frames.max(2) / 2
+                    });
+                    if !already_hit {
+                        let dac = drum_kit_chunk(start_frame, chunks, "hat");
+                        let mut hat = seed.clone();
+                        hat.start_frame = start_frame;
+                        hat.kind = "hat";
+                        hat.velocity = if bar % 16 == 15 { 0.52 } else { 0.38 };
+                        hat.noise_amp = if bar % 16 == 15 { 0.34 } else { 0.24 };
+                        hat.dac_chunk = dac.map(|chunk| chunk.id);
+                        hat.dac_path = dac.map(|chunk| chunk.path.clone()).unwrap_or_default();
+                        drums.push(hat);
+                    }
+                }
+            }
             if bar % 16 == 15 || bar % 16 == 7 {
                 let fill_start = bar_start.saturating_add(bar_frames / 2);
                 for step in 0..4usize {
@@ -2575,14 +2602,18 @@ fn arrange_drum_patterns(mut drums: Vec<DrumEvent>, context: &MusicalContext) ->
                     });
                     if !already_hit {
                         let mut fill = seed.clone();
-                        fill.start_frame = start_frame;
-                        fill.kind = if step % 2 == 0 {
+                        let kind = if step % 2 == 0 {
                             "fill_snare"
                         } else {
                             "fill_hat"
                         };
+                        let dac = drum_kit_chunk(start_frame, chunks, kind);
+                        fill.start_frame = start_frame;
+                        fill.kind = kind;
                         fill.velocity = if bar % 16 == 15 { 0.88 } else { 0.68 };
                         fill.noise_amp = if step % 2 == 0 { 0.70 } else { 0.42 };
+                        fill.dac_chunk = dac.map(|chunk| chunk.id);
+                        fill.dac_path = dac.map(|chunk| chunk.path.clone()).unwrap_or_default();
                         drums.push(fill);
                     }
                 }
@@ -2619,7 +2650,11 @@ fn arrange_runtime_patterns(mut arrangement: RuntimeArrangement<'_>) -> RuntimeA
         arrangement.context,
         "psg_bass",
     );
-    arrangement.drum_events = arrange_drum_patterns(arrangement.drum_events, arrangement.context);
+    arrangement.drum_events = arrange_drum_patterns(
+        arrangement.drum_events,
+        arrangement.dac_chunks,
+        arrangement.context,
+    );
     arrangement
 }
 
@@ -2649,6 +2684,7 @@ fn build_render_plan_runtime_events(
         psg_counter_notes,
         psg_bass_notes,
         drum_events,
+        dac_chunks: chunks,
     });
     build_runtime_events_from_render_plan(
         sample_rate,
@@ -3091,6 +3127,7 @@ fn build_runtime_events_with_optional_ai(
         psg_counter_notes,
         psg_bass_notes,
         drum_events,
+        dac_chunks: chunks,
     });
     build_runtime_events_from_render_plan(
         sample_rate,
@@ -4542,6 +4579,41 @@ fn drum_palette_chunk(frame_index: usize, chunks: &[DacChunk], salt: usize) -> O
     })
 }
 
+fn drum_kit_chunk<'a>(
+    frame_index: usize,
+    chunks: &'a [DacChunk],
+    kind: &str,
+) -> Option<&'a DacChunk> {
+    if chunks.is_empty() {
+        return None;
+    }
+    let nearest = nearest_dac_chunk(frame_index, chunks);
+    let best = chunks.iter().max_by(|a, b| {
+        let a_len = a.sample_count as f32 / DAC_SAMPLE_RATE as f32;
+        let b_len = b.sample_count as f32 / DAC_SAMPLE_RATE as f32;
+        let a_near = 1.0 / (1.0 + a.start_frame.abs_diff(frame_index) as f32 / 18.0);
+        let b_near = 1.0 / (1.0 + b.start_frame.abs_diff(frame_index) as f32 / 18.0);
+        let score = |chunk: &DacChunk, len: f32, near: f32| match kind {
+            "kick" => chunk.rms * 2.4 + len.min(0.20) * 1.4 + near * 0.45,
+            "snare" | "fill_snare" => {
+                chunk.peak * 0.85
+                    + chunk.rms * 1.35
+                    + (1.0 - (len - 0.10).abs() * 5.0).clamp(0.0, 1.0) * 0.45
+                    + near * 0.35
+            }
+            "hat" | "fill_hat" => {
+                chunk.peak * 0.55 + (1.0 - (len / 0.075).min(1.0)) * 1.10 + near * 0.25
+            }
+            _ => chunk.rms + near * 0.75,
+        };
+        score(a, a_len, a_near)
+            .partial_cmp(&score(b, b_len, b_near))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    best.or(nearest)
+}
+
 fn build_drum_events(frames: &[AnalysisFrame], chunks: &[DacChunk]) -> Vec<DrumEvent> {
     let mut drums = Vec::new();
     let mut last_frame = 0usize;
@@ -4553,16 +4625,17 @@ fn build_drum_events(frames: &[AnalysisFrame], chunks: &[DacChunk]) -> Vec<DrumE
         let transient_hit = frame.transient > 0.72 && frame.rms > 0.04;
         let clear_drum = noise_hit || transient_hit;
         if clear_drum && frame.index.saturating_sub(last_frame) > 6 {
-            let dac = nearest_dac_chunk(frame.index, chunks);
+            let kind = if frame.rms > 0.18 {
+                "kick"
+            } else if noise_hit {
+                "snare"
+            } else {
+                "hat"
+            };
+            let dac = drum_kit_chunk(frame.index, chunks, kind);
             drums.push(DrumEvent {
                 start_frame: frame.index,
-                kind: if frame.rms > 0.18 {
-                    "kick"
-                } else if noise_hit {
-                    "noise_hit"
-                } else {
-                    "transient_hit"
-                },
+                kind,
                 velocity: frame.transient.clamp(0.1, 1.0),
                 noise_amp: frame.noise_amp.max(frame.transient * 0.35).clamp(0.0, 1.0),
                 instrument_id: DEFAULT_NOISE_INSTRUMENT,
@@ -4616,7 +4689,8 @@ fn add_grid_drum_events(
                     && drum.velocity >= velocity * 0.85
             });
             if !already_hit {
-                let dac = drum_palette_chunk(cursor, chunks, salt);
+                let dac = drum_kit_chunk(cursor, chunks, kind)
+                    .or_else(|| drum_palette_chunk(cursor, chunks, salt));
                 drums.push(DrumEvent {
                     start_frame: cursor,
                     kind,
