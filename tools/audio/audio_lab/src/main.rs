@@ -2934,12 +2934,88 @@ fn find_ai_hook_seed(lead_notes: &[NoteEvent], context: &MusicalContext) -> Vec<
     ai_phrase_notes(lead_notes, start_frame, phrase_frames)
 }
 
-fn repeat_ai_phrase_as_track(
+#[derive(Clone, Copy)]
+struct AiMelodyTuning {
+    name: &'static str,
+    window_beats: f32,
+    lead_min_midi: i32,
+    lead_max_midi: i32,
+    lead_velocity_scale: f32,
+    phrase_repeat_bars: usize,
+    phrase_octave_shift: i32,
+    hook_octave_shift: i32,
+}
+
+const AI_MELODY_TUNINGS: [AiMelodyTuning; 6] = [
+    AiMelodyTuning {
+        name: "balanced",
+        window_beats: 0.18,
+        lead_min_midi: 55,
+        lead_max_midi: 88,
+        lead_velocity_scale: 1.25,
+        phrase_repeat_bars: 2,
+        phrase_octave_shift: 0,
+        hook_octave_shift: 12,
+    },
+    AiMelodyTuning {
+        name: "lower_theme",
+        window_beats: 0.20,
+        lead_min_midi: 48,
+        lead_max_midi: 76,
+        lead_velocity_scale: 1.34,
+        phrase_repeat_bars: 2,
+        phrase_octave_shift: -12,
+        hook_octave_shift: 0,
+    },
+    AiMelodyTuning {
+        name: "upper_theme",
+        window_beats: 0.16,
+        lead_min_midi: 62,
+        lead_max_midi: 92,
+        lead_velocity_scale: 1.20,
+        phrase_repeat_bars: 2,
+        phrase_octave_shift: 0,
+        hook_octave_shift: 12,
+    },
+    AiMelodyTuning {
+        name: "dense_phrase",
+        window_beats: 0.12,
+        lead_min_midi: 52,
+        lead_max_midi: 86,
+        lead_velocity_scale: 1.18,
+        phrase_repeat_bars: 1,
+        phrase_octave_shift: 0,
+        hook_octave_shift: 12,
+    },
+    AiMelodyTuning {
+        name: "wide_phrase",
+        window_beats: 0.24,
+        lead_min_midi: 45,
+        lead_max_midi: 84,
+        lead_velocity_scale: 1.38,
+        phrase_repeat_bars: 4,
+        phrase_octave_shift: 0,
+        hook_octave_shift: 12,
+    },
+    AiMelodyTuning {
+        name: "mid_hook",
+        window_beats: 0.18,
+        lead_min_midi: 50,
+        lead_max_midi: 80,
+        lead_velocity_scale: 1.42,
+        phrase_repeat_bars: 1,
+        phrase_octave_shift: 0,
+        hook_octave_shift: 7,
+    },
+];
+
+fn repeat_ai_phrase_as_tuned_track(
     seed: &[NoteEvent],
     context: &MusicalContext,
     track: &'static str,
     velocity_scale: f32,
     octave_shift: i32,
+    repeat_bars: usize,
 ) -> Vec<NoteEvent> {
     if seed.len() < 4 {
         return Vec::new();
@@ -2950,7 +3026,7 @@ fn repeat_ai_phrase_as_track(
         .min()
         .unwrap_or(context.grid_offset_frame);
     let phrase_frames = (context.frames_per_beat * 4.0).round().max(24.0) as usize;
-    let repeat_frames = phrase_frames * 2;
+    let repeat_frames = phrase_frames * repeat_bars.max(1);
     let mut out = Vec::new();
     let mut cursor = context.grid_offset_frame;
     while cursor < context.loop_end_frame {
@@ -2963,8 +3039,8 @@ fn repeat_ai_phrase_as_track(
             if start_frame >= context.loop_end_frame {
                 continue;
             }
-            let mut midi = fold_midi_to_range(note.midi + octave_shift, 55, 92);
-            midi = snap_midi_to_scale(midi, context.key_root, context.mode, 55, 92);
+            let mut midi = fold_midi_to_range(note.midi + octave_shift, 48, 96);
+            midi = snap_midi_to_scale(midi, context.key_root, context.mode, 48, 96);
             out.push(NoteEvent {
                 track,
                 start_frame,
@@ -2986,13 +3062,16 @@ fn repeat_ai_phrase_as_track(
 fn build_ai_melodic_layers(
     ai_events: &[AiNoteEvent],
     context: &MusicalContext,
+    tuning: AiMelodyTuning,
 ) -> (
     Vec<NoteEvent>,
     Vec<NoteEvent>,
     Vec<NoteEvent>,
     Vec<NoteEvent>,
 ) {
-    let window = (context.frames_per_beat * 0.18).round().max(5.0) as usize;
+    let window = (context.frames_per_beat * tuning.window_beats)
+        .round()
+        .max(4.0) as usize;
     let lead_events = ai_events
         .iter()
         .filter(|event| event.midi >= 45 && event.velocity >= 0.28)
@@ -3005,9 +3084,9 @@ fn build_ai_melodic_layers(
                 &event,
                 "lead",
                 DEFAULT_LEAD_INSTRUMENT,
-                1.25,
-                55,
-                88,
+                tuning.lead_velocity_scale,
+                tuning.lead_min_midi,
+                tuning.lead_max_midi,
                 context,
             )
         })
@@ -3015,8 +3094,22 @@ fn build_ai_melodic_layers(
 
     let lead = merge_neighbor_notes(lead);
     let phrase_seed = find_ai_hook_seed(&lead, context);
-    let phrase_lead = repeat_ai_phrase_as_track(&phrase_seed, context, "lead", 1.42, 0);
-    let phrase_hook = repeat_ai_phrase_as_track(&phrase_seed, context, "hook", 0.70, 12);
+    let phrase_lead = repeat_ai_phrase_as_tuned_track(
+        &phrase_seed,
+        context,
+        "lead",
+        1.42,
+        tuning.phrase_octave_shift,
+        tuning.phrase_repeat_bars,
+    );
+    let phrase_hook = repeat_ai_phrase_as_tuned_track(
+        &phrase_seed,
+        context,
+        "hook",
+        0.70,
+        tuning.hook_octave_shift,
+        tuning.phrase_repeat_bars,
+    );
 
     let hook = if phrase_hook.len() >= 8 {
         phrase_hook
@@ -3093,55 +3186,79 @@ fn build_runtime_events_with_optional_ai(
     let (context, bass_notes, deterministic_lead, drum_events) =
         build_note_preview_data(frames, sample_rate, chunks);
     let ai_events = read_ai_note_events(ai_notes_path, sample_rate).unwrap_or_default();
-    let (ai_lead, ai_hook, ai_counter, ai_pad) = build_ai_melodic_layers(&ai_events, &context);
-    let use_ai = ai_lead.len() >= 12;
-    let lead_notes = if use_ai { ai_lead } else { deterministic_lead };
-    let pad_notes = if use_ai && ai_pad.len() >= 6 {
-        ai_pad
-    } else {
-        build_spectral_pad_notes(frames, &bass_notes, &lead_notes, &context)
-    };
-    let chord_notes =
-        build_spectral_chord_notes(frames, &bass_notes, &lead_notes, &pad_notes, &context);
-    let counter_notes = if use_ai && ai_counter.len() >= 4 {
-        ai_counter
-    } else {
-        build_spectral_counter_notes(frames, &lead_notes, &context)
-    };
-    let hook_notes = if use_ai && ai_hook.len() >= 4 {
-        ai_hook
-    } else {
-        build_hook_notes(frames, &context)
-    };
-    let psg_lead_notes = build_psg_lead_notes(&hook_notes);
-    let psg_counter_notes = build_psg_counter_notes(&counter_notes);
-    let psg_bass_notes = build_psg_bass_notes(&bass_notes);
-    let arrangement = arrange_runtime_patterns(RuntimeArrangement {
-        context: &context,
-        bass_notes,
-        lead_notes,
-        pad_notes,
-        chord_notes,
-        counter_notes,
-        psg_lead_notes,
-        psg_counter_notes,
-        psg_bass_notes,
-        drum_events,
-        dac_chunks: chunks,
-    });
-    build_runtime_events_from_render_plan(
-        sample_rate,
-        context.loop_end_frame,
-        &arrangement.bass_notes,
-        &arrangement.lead_notes,
-        &arrangement.pad_notes,
-        &arrangement.chord_notes,
-        &arrangement.counter_notes,
-        &arrangement.psg_lead_notes,
-        &arrangement.psg_counter_notes,
-        &arrangement.psg_bass_notes,
-        &arrangement.drum_events,
-    )
+    let mut best_events = None;
+    let mut best_score = f32::MIN;
+
+    for tuning in AI_MELODY_TUNINGS {
+        let (ai_lead, ai_hook, ai_counter, ai_pad) =
+            build_ai_melodic_layers(&ai_events, &context, tuning);
+        let use_ai = ai_lead.len() >= 12;
+        let lead_notes = if use_ai {
+            ai_lead
+        } else {
+            deterministic_lead.clone()
+        };
+        let pad_notes = if use_ai && ai_pad.len() >= 6 {
+            ai_pad
+        } else {
+            build_spectral_pad_notes(frames, &bass_notes, &lead_notes, &context)
+        };
+        let chord_notes =
+            build_spectral_chord_notes(frames, &bass_notes, &lead_notes, &pad_notes, &context);
+        let counter_notes = if use_ai && ai_counter.len() >= 4 {
+            ai_counter
+        } else {
+            build_spectral_counter_notes(frames, &lead_notes, &context)
+        };
+        let hook_notes = if use_ai && ai_hook.len() >= 4 {
+            ai_hook
+        } else {
+            build_hook_notes(frames, &context)
+        };
+        let arrangement = arrange_runtime_patterns(RuntimeArrangement {
+            context: &context,
+            bass_notes: bass_notes.clone(),
+            lead_notes,
+            pad_notes,
+            chord_notes,
+            counter_notes,
+            psg_lead_notes: build_psg_lead_notes(&hook_notes),
+            psg_counter_notes: Vec::new(),
+            psg_bass_notes: Vec::new(),
+            drum_events: drum_events.clone(),
+            dac_chunks: chunks,
+        });
+        let events = build_runtime_events_from_render_plan(
+            sample_rate,
+            context.loop_end_frame,
+            &arrangement.bass_notes,
+            &arrangement.lead_notes,
+            &arrangement.pad_notes,
+            &arrangement.chord_notes,
+            &arrangement.counter_notes,
+            &arrangement.psg_lead_notes,
+            &arrangement.psg_counter_notes,
+            &arrangement.psg_bass_notes,
+            &arrangement.drum_events,
+        );
+        let metrics = compute_reference_match(frames, sample_rate, &events);
+        let tie_bias = if tuning.name == "balanced" {
+            0.000001
+        } else {
+            0.0
+        };
+        let score = metrics.overall_match
+            + metrics.lead_contour_match * 0.70
+            + metrics.bass_contour_match * 0.15
+            - (metrics.drum_density_ratio - 1.50).abs() * 0.015
+            + tie_bias;
+        if score > best_score {
+            best_score = score;
+            best_events = Some(events);
+        }
+    }
+
+    best_events.unwrap_or_else(|| build_render_plan_runtime_events(frames, sample_rate, chunks))
 }
 
 fn write_runtime_binary(path: &Path, sample_rate: u32, events: &[RuntimeEvent]) -> io::Result<()> {
