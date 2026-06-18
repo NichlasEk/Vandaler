@@ -162,8 +162,8 @@ static void ymInitVoice(u8 channel)
         YM2612_writeReg(part, 0x50 + reg, fmAttack[role][op]);
         YM2612_writeReg(part, 0x60 + reg, fmDecay[role][op]);
         YM2612_writeReg(part, 0x70 + reg, fmSustainRate[role][op]);
-        YM2612_writeReg(part, 0x80 + reg, fmRelease[role][op]);
-        YM2612_writeReg(part, 0x90 + reg, fmSustainLevel[role][op]);
+        YM2612_writeReg(part, 0x80 + reg, ((fmSustainLevel[role][op] & 0x0F) << 4) | (fmRelease[role][op] & 0x0F));
+        YM2612_writeReg(part, 0x90 + reg, 0x00);
     }
 
     ymSetLevel(channel, 0);
@@ -179,6 +179,7 @@ static void ymApplyChannel(u8 channel, u16 fnum, u8 block, u8 level)
     if (!wantOn)
     {
         if (wasOn) ymKey(channel, FALSE);
+        if (wasOn) ymSetLevel(channel, 0);
         fmCurrentFnum[channel] = 0;
         fmCurrentBlock[channel] = 0;
         fmCurrentLevel[channel] = 0;
