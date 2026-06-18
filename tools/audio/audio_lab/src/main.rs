@@ -2213,17 +2213,54 @@ fn note_active_at_tick(note: &NoteEvent, tick: u32, sample_rate: u32) -> bool {
     tick >= start && tick < end.max(start + 1)
 }
 
-fn note_to_runtime_pitch(note: Option<&NoteEvent>) -> (u16, u8, u8) {
+fn role_runtime_gain(role: &str) -> f32 {
+    match role {
+        "bass" => 2.85,
+        "lead" => 3.05,
+        "pad" => 1.05,
+        "chord" => 1.35,
+        "counter" => 1.85,
+        _ => 2.20,
+    }
+}
+
+fn note_to_runtime_pitch(note: Option<&NoteEvent>, role: &str) -> (u16, u8, u8) {
     if let Some(note) = note {
         let (fnum, block) = ym2612_pitch(note.hz);
         let level = if fnum == 0 {
             0
         } else {
-            level15(note.velocity * 2.35)
+            level15(note.velocity * role_runtime_gain(role))
         };
         return (fnum, block, level);
     }
     (0, 0, 0)
+}
+
+fn drum_noise_level(drum: Option<&DrumEvent>) -> u8 {
+    let Some(drum) = drum else {
+        return 0;
+    };
+    let value = match drum.kind {
+        "hat" | "fill_hat" => drum.noise_amp * 0.12,
+        "kick" => drum.noise_amp * 0.05,
+        "snare" | "fill_snare" => drum.noise_amp.max(drum.velocity * 0.55) * 0.32,
+        _ => drum.noise_amp * 0.18,
+    };
+    level15(value)
+}
+
+fn drum_dac_level(drum: Option<&DrumEvent>) -> u8 {
+    let Some(drum) = drum else {
+        return 0;
+    };
+    let value = match drum.kind {
+        "kick" => drum.velocity * 1.18,
+        "snare" | "fill_snare" => drum.velocity * 1.08,
+        "hat" | "fill_hat" => drum.velocity * 0.58,
+        _ => drum.velocity * 0.90,
+    };
+    level15(value)
 }
 
 fn psg_tone_from_hz(hz: f32) -> u16 {
@@ -2348,19 +2385,17 @@ fn build_runtime_events_from_render_plan(
             .iter()
             .find(|note| note_active_at_tick(note, tick, sample_rate));
         let drum = drum_at_tick(drum_events, tick, sample_rate);
-        let (fm0_fnum, fm0_block, fm0_level) = note_to_runtime_pitch(bass);
-        let (fm1_fnum, fm1_block, fm1_level) = note_to_runtime_pitch(lead);
-        let (fm2_fnum, fm2_block, fm2_level) = note_to_runtime_pitch(pad);
-        let (fm3_fnum, fm3_block, fm3_level) = note_to_runtime_pitch(chord);
-        let (fm4_fnum, fm4_block, fm4_level) = note_to_runtime_pitch(counter);
+        let (fm0_fnum, fm0_block, fm0_level) = note_to_runtime_pitch(bass, "bass");
+        let (fm1_fnum, fm1_block, fm1_level) = note_to_runtime_pitch(lead, "lead");
+        let (fm2_fnum, fm2_block, fm2_level) = note_to_runtime_pitch(pad, "pad");
+        let (fm3_fnum, fm3_block, fm3_level) = note_to_runtime_pitch(chord, "chord");
+        let (fm4_fnum, fm4_block, fm4_level) = note_to_runtime_pitch(counter, "counter");
         let (psg0_tone, psg0_level) = note_to_psg_pitch(psg_lead);
         let (psg1_tone, psg1_level) = note_to_psg_pitch(psg_counter);
         let (psg2_tone, psg2_level) = note_to_psg_pitch(psg_bass);
-        let psg_noise_level = drum
-            .map(|drum| level15(drum.noise_amp.max(drum.velocity * 0.7)))
-            .unwrap_or(0);
+        let psg_noise_level = drum_noise_level(drum);
         let dac_chunk = drum.and_then(|drum| drum.dac_chunk).unwrap_or(255).min(254) as u8;
-        let dac_level = drum.map(|drum| level15(drum.velocity)).unwrap_or(0);
+        let dac_level = drum_dac_level(drum);
         let kind = if drum.is_some() {
             class_id("drum")
         } else if bass.is_some() {
