@@ -1818,7 +1818,7 @@ fn mix_dac_drums(
                 break;
             }
             let src_index = (i * DAC_RATE / PREVIEW_RATE).min(bytes.len() - 1);
-            let centered = bytes[src_index] as f32 - 128.0;
+            let centered = bytes[src_index] as i8 as f32;
             let sample = (centered / 128.0 * 32767.0 * gain).round() as i32;
             let mixed = i32::from(out[out_index]) + sample;
             out[out_index] = mixed.clamp(i16::MIN as i32, i16::MAX as i32) as i16;

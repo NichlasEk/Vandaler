@@ -13,7 +13,7 @@ const ANALYSIS_HOP: usize = 512;
 const PITCH_MIN_MIDI: i32 = 24;
 const PITCH_MAX_MIDI: i32 = 96;
 const PITCH_BINS: usize = (PITCH_MAX_MIDI - PITCH_MIN_MIDI + 1) as usize;
-const DAC_SAMPLE_RATE: u32 = 8_000;
+const DAC_SAMPLE_RATE: u32 = 16_000;
 const PSG_CLOCK: f32 = 3_579_545.0;
 const DEFAULT_INSTRUMENT_BANK: &str =
     "audio/instruments/vand_furnace_core/bank.vand-instruments.json";
@@ -3357,7 +3357,7 @@ fn write_sgdk_audio(
     c.push_str(&format!("#include \"{}\"\n\n", include_name));
     for chunk in chunks {
         c.push_str(&format!(
-            "static const u8 {}{:02}[] =\n{{\n",
+            "static const u8 {}{:02}[] __attribute__((aligned(256))) =\n{{\n",
             symbols.dac_chunk_prefix, chunk.id
         ));
         for row in chunk.samples.chunks(16) {
@@ -3579,9 +3579,12 @@ fn resample_dac_chunk(slice: &[f32], source_rate: u32, target_rate: u32, peak: f
             normalized *= fade_in.min(fade_out).min(1.0);
         }
 
-        out.push((normalized * 127.0 + 128.0).round().clamp(0.0, 255.0) as u8);
+        let signed = (normalized * 127.0).round().clamp(-128.0, 127.0) as i8;
+        out.push(signed as u8);
     }
 
+    let padded_len = ((out.len() + 255) / 256) * 256;
+    out.resize(padded_len, 0);
     out
 }
 
@@ -3670,7 +3673,7 @@ fn write_dac_chunks_json(
         "  \"playback_sample_rate\": {},\n",
         DAC_SAMPLE_RATE
     ));
-    out.push_str("  \"encoding\": \"unsigned_u8_pcm_center_128\",\n");
+    out.push_str("  \"encoding\": \"signed_i8_pcm4_center_0_padded_256\",\n");
     out.push_str("  \"chunks\": [\n");
     for (i, chunk) in chunks.iter().enumerate() {
         let comma = if i + 1 == chunks.len() { "" } else { "," };
@@ -3706,7 +3709,7 @@ fn write_dac_preview_wav(bundle_dir: &Path, chunks: &[DacChunk]) -> io::Result<P
 
     for chunk in chunks {
         for sample in &chunk.samples {
-            let centered = i16::from(*sample) - 128;
+            let centered = i16::from(*sample as i8);
             let value = centered.saturating_mul(256);
             stereo.push(value);
             stereo.push(value);
@@ -3845,7 +3848,7 @@ fn write_runtime_preview_wav(
 
             if let Some((bytes, pos, rate)) = dac_active.as_mut() {
                 if !bytes.is_empty() {
-                    let centered = bytes[*pos] as f32 - 128.0;
+                    let centered = bytes[*pos] as i8 as f32;
                     sample += centered / 128.0 * dac_gain;
                     dac_rate_accum += *rate;
                     while dac_rate_accum >= PREVIEW_RATE {

@@ -13,21 +13,13 @@
 #define VAND_AUDIO_ROLE_COUNTER 4
 #define VAND_AUDIO_FM_KEY_ALL 0xF0
 #define VAND_AUDIO_DAC_NONE 255
-#define VAND_AUDIO_DAC_DEFAULT_RATE 8000
-#define VAND_AUDIO_DAC_BOOST 2
-#define VAND_AUDIO_TICKS_PER_SECOND 60
+#define VAND_AUDIO_PCM4_CHANNELS 4
 
 static bool audioReady = FALSE;
 static const u8 * const *dacSamples = NULL;
 static const u16 *dacLengths = NULL;
-static const u16 *dacRates = NULL;
+static u8 dacNextChannel = 0;
 static u16 dacCount = 0;
-static const u8 *dacActive = NULL;
-static u16 dacLength = 0;
-static u16 dacPos = 0;
-static u16 dacRate = 0;
-static u16 dacRateRemainder = 0;
-static u8 dacLevel = 0;
 static u16 fmCurrentFnum[VAND_AUDIO_FM_CHANNELS] = {0, 0, 0, 0, 0};
 static u8 fmCurrentBlock[VAND_AUDIO_FM_CHANNELS] = {0, 0, 0, 0, 0};
 static u8 fmCurrentLevel[VAND_AUDIO_FM_CHANNELS] = {0, 0, 0, 0, 0};
@@ -230,53 +222,29 @@ static void psgSetToneLevel(u8 channel, u16 tone, u8 level)
 
 static void dacStop(void)
 {
-    dacActive = NULL;
-    dacLength = 0;
-    dacPos = 0;
-    dacRate = 0;
-    dacRateRemainder = 0;
-    dacLevel = 0;
-    YM2612_writeReg(0, 0x2A, 0x80);
+    SND_PCM4_stopPlay(SOUND_PCM_CH1);
+    SND_PCM4_stopPlay(SOUND_PCM_CH2);
+    SND_PCM4_stopPlay(SOUND_PCM_CH3);
+    SND_PCM4_stopPlay(SOUND_PCM_CH4);
+    dacNextChannel = 0;
 }
 
 static void dacStart(u8 chunk, u8 level)
 {
+    static const SoundPCMChannel channels[VAND_AUDIO_PCM4_CHANNELS] = {
+        SOUND_PCM_CH1,
+        SOUND_PCM_CH2,
+        SOUND_PCM_CH3,
+        SOUND_PCM_CH4
+    };
+    SoundPCMChannel channel;
+
     if ((chunk == VAND_AUDIO_DAC_NONE) || (level == 0) || (dacSamples == NULL) || (dacLengths == NULL) || (chunk >= dacCount)) return;
+    if ((dacSamples[chunk] == NULL) || (dacLengths[chunk] == 0)) return;
 
-    dacActive = dacSamples[chunk];
-    dacLength = dacLengths[chunk];
-    dacPos = 0;
-    dacRate = ((dacRates != NULL) && (dacRates[chunk] > 0)) ? dacRates[chunk] : VAND_AUDIO_DAC_DEFAULT_RATE;
-    dacRateRemainder = 0;
-    dacLevel = level > 15 ? 15 : level;
-    if ((dacActive == NULL) || (dacLength == 0)) dacStop();
-}
-
-static void dacPump(void)
-{
-    u16 samplesThisTick;
-    u16 i;
-
-    if (dacActive == NULL) return;
-
-    dacRateRemainder += dacRate;
-    samplesThisTick = dacRateRemainder / VAND_AUDIO_TICKS_PER_SECOND;
-    dacRateRemainder %= VAND_AUDIO_TICKS_PER_SECOND;
-
-    for (i = 0; i < samplesThisTick; i++)
-    {
-        const s16 centered = (s16)dacActive[dacPos++] - 128;
-        s16 scaled = 128 + ((centered * dacLevel * VAND_AUDIO_DAC_BOOST) / 15);
-        if (scaled < 0) scaled = 0;
-        if (scaled > 255) scaled = 255;
-        const u8 sample = (u8)scaled;
-        YM2612_writeReg(0, 0x2A, sample);
-        if (dacPos >= dacLength)
-        {
-            dacStop();
-            return;
-        }
-    }
+    channel = channels[dacNextChannel++ & (VAND_AUDIO_PCM4_CHANNELS - 1)];
+    SND_PCM4_setVolume(channel, level > 15 ? 15 : level);
+    SND_PCM4_startPlay(dacSamples[chunk], dacLengths[chunk], channel, FALSE);
 }
 
 static void applyEvent(const VandAudioEvent *event)
@@ -300,6 +268,11 @@ void VandAudio_init(void)
     YM2612_writeReg(0, 0x27, 0x00);
     YM2612_writeReg(0, 0x2B, 0x80);
     YM2612_writeReg(0, 0x2A, 0x80);
+    SND_PCM4_loadDriver(TRUE);
+    SND_PCM4_setVolume(SOUND_PCM_CH1, 15);
+    SND_PCM4_setVolume(SOUND_PCM_CH2, 15);
+    SND_PCM4_setVolume(SOUND_PCM_CH3, 15);
+    SND_PCM4_setVolume(SOUND_PCM_CH4, 15);
     ymInitVoice(VAND_AUDIO_FM_BASS_CH);
     ymInitVoice(VAND_AUDIO_FM_LEAD_CH);
     ymInitVoice(VAND_AUDIO_FM_PAD_CH);
@@ -322,8 +295,8 @@ void VandAudio_setDacBank(const u8 * const *samples, const u16 *lengths, const u
 {
     dacSamples = samples;
     dacLengths = lengths;
-    dacRates = rates;
     dacCount = count;
+    (void)rates;
     dacStop();
 }
 
@@ -367,8 +340,6 @@ void VandAudio_stop(VandAudioPlayer *player)
 void VandAudio_update(VandAudioPlayer *player)
 {
     const VandAudioEvent *event;
-
-    dacPump();
 
     if ((player == NULL) || !player->playing || (player->events == NULL)) return;
 

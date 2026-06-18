@@ -23,17 +23,18 @@ state is `STATE_PLAY`.
 `stopTone()` leaves PSG channels 1 and 2 alone while `cityMusicPlaying` is true,
 so short SFX cleanup does not silence the music carrier channels.
 
-## Current level implementation
+## Current runtime implementation
 
-The first direct YM/DAC pass was technically active but too quiet in-game. The
-current level fix is in `src/vand_audio.c`:
+The first direct YM/DAC pass was technically active but too quiet in-game
+because DAC bytes were pumped from the 60 Hz game update. Current runtime
+playback uses SGDK's Z80 `SND_PCM4` driver for generated drum/sample chunks:
 
-- generated FM bass intent is mirrored to PSG channel 1
-- generated FM lead intent is mirrored to PSG channel 2
-- PSG levels are boosted by `+7` and clamped to `15`
-- the last PSG tone is held for `10` update ticks when an analysis frame has no
-  usable pitch, which makes the converted line less hesitant
-- PSG noise still uses channel 3 for generated noise/drum/sample intent
+- `src/vand_audio.c` loads `SND_PCM4` during `VandAudio_init()`
+- generated DAC chunks are exported as signed 8-bit, 16 kHz, 256-byte-aligned
+  PCM4 samples
+- `VandAudioEvent.dac_chunk` starts PCM4 playback on rotating PCM channels
+- PSG noise remains only a light transient layer instead of carrying the drum
+  body
 
 This is deliberately a playback/mapping boost, not a replacement composition.
 If the result still sounds wrong, improve the analyser/exporter so
