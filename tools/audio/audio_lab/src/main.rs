@@ -3740,6 +3740,237 @@ fn write_runtime_preview_wav(
     Ok(path)
 }
 
+fn runtime_event_for_tick<'a>(
+    events: &'a [RuntimeEvent],
+    tick: u32,
+    cursor: &mut usize,
+    start_tick: &mut u32,
+) -> Option<&'a RuntimeEvent> {
+    while *cursor < events.len() {
+        let end_tick = start_tick.saturating_add(events[*cursor].frames as u32);
+        if tick < end_tick {
+            return events.get(*cursor);
+        }
+        *start_tick = end_tick;
+        *cursor += 1;
+    }
+    None
+}
+
+fn hz_match(reference_hz: f32, runtime_hz: f32) -> Option<f32> {
+    if reference_hz <= 0.0 && runtime_hz <= 0.0 {
+        return None;
+    }
+    if reference_hz <= 0.0 || runtime_hz <= 0.0 {
+        return Some(0.0);
+    }
+    let ref_midi = hz_to_midi(reference_hz)?;
+    let run_midi = hz_to_midi(runtime_hz)?;
+    let distance = (ref_midi - run_midi).abs() as f32;
+    Some((1.0 - distance / 12.0).clamp(0.0, 1.0))
+}
+
+fn weighted_average(pairs: &[(f32, f32)]) -> f32 {
+    let weight = pairs.iter().map(|(_, weight)| *weight).sum::<f32>();
+    if weight <= 1e-6 {
+        return 0.0;
+    }
+    pairs
+        .iter()
+        .map(|(value, weight)| value * weight)
+        .sum::<f32>()
+        / weight
+}
+
+fn feature_correlation(reference: &[f32], runtime: &[f32]) -> f32 {
+    let len = reference.len().min(runtime.len());
+    if len == 0 {
+        return 0.0;
+    }
+    let ref_avg = reference.iter().take(len).sum::<f32>() / len as f32;
+    let run_avg = runtime.iter().take(len).sum::<f32>() / len as f32;
+    let mut num = 0.0;
+    let mut ref_den = 0.0;
+    let mut run_den = 0.0;
+    for index in 0..len {
+        let a = reference[index] - ref_avg;
+        let b = runtime[index] - run_avg;
+        num += a * b;
+        ref_den += a * a;
+        run_den += b * b;
+    }
+    if ref_den <= 1e-6 || run_den <= 1e-6 {
+        return 0.0;
+    }
+    ((num / (ref_den.sqrt() * run_den.sqrt())) * 0.5 + 0.5).clamp(0.0, 1.0)
+}
+
+fn section_energy(values: &[f32], sections: usize) -> Vec<f32> {
+    if values.is_empty() || sections == 0 {
+        return Vec::new();
+    }
+    let mut out = vec![0.0; sections];
+    let mut counts = vec![0usize; sections];
+    for (index, value) in values.iter().enumerate() {
+        let section = (index * sections / values.len()).min(sections - 1);
+        out[section] += *value;
+        counts[section] += 1;
+    }
+    for (value, count) in out.iter_mut().zip(counts) {
+        if count > 0 {
+            *value /= count as f32;
+        }
+    }
+    out
+}
+
+fn write_reference_match_report(
+    path: &Path,
+    input: &Path,
+    frames: &[AnalysisFrame],
+    sample_rate: u32,
+    events: &[RuntimeEvent],
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut cursor = 0usize;
+    let mut event_start_tick = 0u32;
+    let mut bass_matches = Vec::new();
+    let mut lead_matches = Vec::new();
+    let mut drum_matches = Vec::new();
+    let mut reference_energy = Vec::new();
+    let mut runtime_energy = Vec::new();
+    let mut reference_drums = 0usize;
+    let mut runtime_drums = 0usize;
+
+    for frame in frames {
+        let tick = analysis_frame_to_tick(frame.index, sample_rate);
+        let event = runtime_event_for_tick(events, tick, &mut cursor, &mut event_start_tick);
+        let Some(event) = event else {
+            continue;
+        };
+        let runtime_bass_hz = hz_from_ym2612_pitch(event.fm0_fnum, event.fm0_block);
+        let runtime_lead_hz = hz_from_ym2612_pitch(event.fm1_fnum, event.fm1_block);
+        let runtime_pad_hz = hz_from_ym2612_pitch(event.fm2_fnum, event.fm2_block);
+        let runtime_counter_hz = hz_from_ym2612_pitch(event.fm4_fnum, event.fm4_block);
+        let runtime_drum = event.dac_level > 0 || event.psg_noise_level > 0;
+        let reference_drum = frame.transient > 0.42
+            || frame.noise_amp > 0.36
+            || matches!(frame.class_name, "drum" | "sample");
+
+        if let Some(value) = hz_match(frame.bass_hz, runtime_bass_hz) {
+            bass_matches.push((value, frame.bass_amp.max(frame.rms * 0.35).max(0.05)));
+        }
+        let runtime_best_lead = if runtime_lead_hz > 0.0 {
+            runtime_lead_hz
+        } else if runtime_counter_hz > 0.0 {
+            runtime_counter_hz
+        } else {
+            runtime_pad_hz
+        };
+        if let Some(value) = hz_match(frame.lead_hz.max(frame.hook_hz), runtime_best_lead) {
+            lead_matches.push((value, frame.lead_amp.max(frame.hook_amp).max(0.05)));
+        }
+
+        if reference_drum {
+            reference_drums += 1;
+        }
+        if runtime_drum {
+            runtime_drums += 1;
+        }
+        drum_matches.push((
+            if reference_drum == runtime_drum {
+                1.0
+            } else {
+                0.0
+            },
+            frame.transient.max(frame.noise_amp).max(0.05),
+        ));
+
+        let ref_e = frame
+            .bass_amp
+            .max(frame.lead_amp)
+            .max(frame.hook_amp)
+            .max(frame.noise_amp)
+            .max(frame.rms);
+        let run_e = [
+            event.fm0_level,
+            event.fm1_level,
+            event.fm2_level,
+            event.fm3_level,
+            event.fm4_level,
+            event.psg0_level,
+            event.psg1_level,
+            event.psg2_level,
+            event.psg_noise_level,
+            event.dac_level,
+        ]
+        .iter()
+        .map(|level| *level as f32 / 15.0)
+        .fold(0.0f32, f32::max);
+        reference_energy.push(ref_e);
+        runtime_energy.push(run_e);
+    }
+
+    let bass_match = weighted_average(&bass_matches);
+    let lead_match = weighted_average(&lead_matches);
+    let drum_match = weighted_average(&drum_matches);
+    let reference_sections = section_energy(&reference_energy, 16);
+    let runtime_sections = section_energy(&runtime_energy, 16);
+    let energy_match = feature_correlation(&reference_sections, &runtime_sections);
+    let drum_density_ratio = if reference_drums == 0 {
+        0.0
+    } else {
+        runtime_drums as f32 / reference_drums as f32
+    };
+    let overall = bass_match * 0.22 + lead_match * 0.34 + drum_match * 0.24 + energy_match * 0.20;
+
+    let text = format!(
+        concat!(
+            "{{\n",
+            "  \"format\": \"vandaler-reference-match-v0\",\n",
+            "  \"source\": \"{}\",\n",
+            "  \"frames_compared\": {},\n",
+            "  \"runtime_events\": {},\n",
+            "  \"overall_match\": {:.5},\n",
+            "  \"lead_contour_match\": {:.5},\n",
+            "  \"bass_contour_match\": {:.5},\n",
+            "  \"drum_transient_match\": {:.5},\n",
+            "  \"section_energy_match\": {:.5},\n",
+            "  \"reference_drum_frames\": {},\n",
+            "  \"runtime_drum_frames\": {},\n",
+            "  \"drum_density_ratio\": {:.5},\n",
+            "  \"reference_energy_sections\": [{}],\n",
+            "  \"runtime_energy_sections\": [{}]\n",
+            "}}\n"
+        ),
+        json_escape(&input.display().to_string()),
+        reference_energy.len(),
+        events.len(),
+        overall,
+        lead_match,
+        bass_match,
+        drum_match,
+        energy_match,
+        reference_drums,
+        runtime_drums,
+        drum_density_ratio,
+        reference_sections
+            .iter()
+            .map(|value| format!("{value:.5}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        runtime_sections
+            .iter()
+            .map(|value| format!("{value:.5}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    std::fs::write(path, text)
+}
+
 fn write_analysis_json(
     path: &Path,
     input: &Path,
@@ -5137,8 +5368,16 @@ fn analyse_input(
     let note_arrangement = bundle_dir.join("note_arrangement.vand-audio.json");
     let render_plan = bundle_dir.join("render_plan.vand-audio.json");
     let preview_report = bundle_dir.join("preview_report.json");
+    let reference_match_report = bundle_dir.join("reference_match_report.json");
     let dac_preview = write_dac_preview_wav(&bundle_dir, &dac_chunks)?;
     let runtime_preview = write_runtime_preview_wav(&bundle_dir, &runtime_events, &dac_chunks)?;
+    write_reference_match_report(
+        &reference_match_report,
+        input,
+        &frames,
+        imported.wav.sample_rate,
+        &runtime_events,
+    )?;
     write_import_metadata(&import_metadata, input, &imported)?;
     write_analysis_json(&out, input, &imported.wav, &frames)?;
     write_note_arrangement_json(
