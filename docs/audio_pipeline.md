@@ -138,6 +138,9 @@ audio core by writing Mega Drive sound-chip registers and rendering a short WAV.
 The front-end also has an `AI analysis` selector. `Off` keeps the deterministic
 Rust analyser only. `Basic Pitch` and `Demucs + Basic Pitch` are optional local
 toolchain hooks; they do not download or install anything by themselves.
+Step-Audio-EditX is separate from this selector for now: it is a heavyweight
+source-guided probe used to create short reference WAVs, not a Mega Drive
+runtime path.
 
 AI settings are persisted in `tools/audio/vand_ai_lism/settings.toml`:
 
@@ -192,6 +195,43 @@ sh tools/audio/setup_vand_ai_lism_ai.sh
 
 The script requires Python 3.9-3.11. It intentionally refuses the system
 Python 3.14 because Basic Pitch does not list that version as supported.
+
+For Step-Audio-EditX guide probes, keep the model outside the repo. The current
+local default is:
+
+```text
+/home/nichlas/models/Step-Audio-EditX/
+  Step-Audio-EditX/
+  Step-Audio-Tokenizer/
+```
+
+Run a short guided probe with:
+
+```sh
+tools/audio/run_step_audio_editx_probe.sh 'audio/source/MacGyver - 1985.mp3'
+```
+
+The runner copies `/home/nichlas/Step-Audio-EditX` to `/tmp`, patches the copied
+code to cap generation length and use CPU offload, then writes ignored outputs
+under:
+
+```text
+audio/converted/MacGyver - 1985.vand-audio/ai/step_audio_editx/
+```
+
+Useful overrides:
+
+```sh
+STEP_AUDIO_SECONDS=6 \
+STEP_AUDIO_START=12 \
+STEP_AUDIO_GPU_MEMORY=18GiB \
+STEP_AUDIO_PROMPT_TEXT='Instrumental TV theme music with punchy drums' \
+tools/audio/run_step_audio_editx_probe.sh 'audio/source/MacGyver - 1985.mp3'
+```
+
+Treat the result as a reference target for instrumentation and drum extraction.
+It should not be copied into the ROM path; the runtime still has to be rendered
+as YM2612, PSG, and DAC events.
 
 `analyse-audio` is the first Rust-native import/transcription pass. It accepts
 direct 16-bit PCM WAV and can import MP3/OGG/FLAC/other ffmpeg-supported audio

@@ -12,6 +12,8 @@ freezes again.
   `Demucs + Basic Pitch`.
 - AI settings are persisted in `tools/audio/vand_ai_lism/settings.toml`.
 - The intended local model/tool root is `/home/nichlas/ai`.
+- Step-Audio-EditX is being evaluated as an optional guide/reference pass from
+  local model files under `/home/nichlas/models/Step-Audio-EditX`.
 - The app now separates:
   - `ai_home`: cache/model root, default `/home/nichlas/ai`
   - `ai_tool_dir`: explicit executable directory, recommended
@@ -114,6 +116,22 @@ installed.
     bass, sustained mid-register notes for pad/chord, and high notes that do not
     closely duplicate the lead for counter.
 11. Only after the Basic Pitch/Demucs path is stable, evaluate MT3 or Omnizart.
+12. In progress: evaluate Step-Audio-EditX as a source-guided reference pass
+    for short original-theme excerpts. This is not a runtime renderer. It is a
+    listening and extraction aid for understanding the target sound, especially
+    drum/body/timbre, before mapping the result back into YM2612/PSG/DAC rules.
+    The local probe runner is:
+
+   ```sh
+   tools/audio/run_step_audio_editx_probe.sh 'audio/source/MacGyver - 1985.mp3'
+   ```
+
+   It copies the local Step-Audio-EditX code to `/tmp`, caps generation length,
+   enables CPU offload, and writes ignored artifacts under:
+
+   ```text
+   audio/converted/<name>.vand-audio/ai/step_audio_editx/
+   ```
 
 ## Verification Commands
 
@@ -123,6 +141,7 @@ cargo check --manifest-path tools/audio/audio_lab/Cargo.toml
 cargo check --manifest-path tools/audio/vand_ai_lism/src-tauri/Cargo.toml
 cargo test --manifest-path tools/audio/vand_ai_lism/src-tauri/Cargo.toml
 cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-audio audio/source/endless_cyber_runner.mp3 --out /tmp/vandaler-ai-smoke/arrangement.vand-audio.json
+tools/audio/run_step_audio_editx_probe.sh 'audio/source/MacGyver - 1985.mp3'
 ```
 
 ## Notes
@@ -133,3 +152,8 @@ cargo run --manifest-path tools/audio/audio_lab/Cargo.toml -- analyse-audio audi
 - Do not replace the deterministic analyser with AI output immediately. Use AI
   sidecars first, compare in the debug UI, then feed selected notes into the
   arranger once the output is explainable.
+- Step-Audio-EditX currently needs a CUDA-visible Python environment with
+  `torch`, `funasr`, `onnxruntime`, `omegaconf`, `hyperpyyaml`, `diffusers`,
+  `openai-whisper`, and `sox`. On this machine the tested environment is the
+  `foundation1` conda env, but a dedicated clean env is preferable later because
+  these dependencies can conflict with unrelated audio packages.
