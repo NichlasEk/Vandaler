@@ -3824,17 +3824,26 @@ fn section_energy(values: &[f32], sections: usize) -> Vec<f32> {
     out
 }
 
-fn write_reference_match_report(
-    path: &Path,
-    input: &Path,
+struct ReferenceMatchMetrics {
+    frames_compared: usize,
+    runtime_events: usize,
+    overall_match: f32,
+    lead_contour_match: f32,
+    bass_contour_match: f32,
+    drum_transient_match: f32,
+    section_energy_match: f32,
+    reference_drum_frames: usize,
+    runtime_drum_frames: usize,
+    drum_density_ratio: f32,
+    reference_energy_sections: Vec<f32>,
+    runtime_energy_sections: Vec<f32>,
+}
+
+fn compute_reference_match(
     frames: &[AnalysisFrame],
     sample_rate: u32,
     events: &[RuntimeEvent],
-) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
+) -> ReferenceMatchMetrics {
     let mut cursor = 0usize;
     let mut event_start_tick = 0u32;
     let mut bass_matches = Vec::new();
@@ -3927,11 +3936,38 @@ fn write_reference_match_report(
     };
     let overall = bass_match * 0.22 + lead_match * 0.34 + drum_match * 0.24 + energy_match * 0.20;
 
+    ReferenceMatchMetrics {
+        frames_compared: reference_energy.len(),
+        runtime_events: events.len(),
+        overall_match: overall,
+        lead_contour_match: lead_match,
+        bass_contour_match: bass_match,
+        drum_transient_match: drum_match,
+        section_energy_match: energy_match,
+        reference_drum_frames: reference_drums,
+        runtime_drum_frames: runtime_drums,
+        drum_density_ratio,
+        reference_energy_sections: reference_sections,
+        runtime_energy_sections: runtime_sections,
+    }
+}
+
+fn write_reference_match_report(
+    path: &Path,
+    input: &Path,
+    selected_variant: &str,
+    metrics: &ReferenceMatchMetrics,
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
     let text = format!(
         concat!(
             "{{\n",
             "  \"format\": \"vandaler-reference-match-v0\",\n",
             "  \"source\": \"{}\",\n",
+            "  \"selected_variant\": \"{}\",\n",
             "  \"frames_compared\": {},\n",
             "  \"runtime_events\": {},\n",
             "  \"overall_match\": {:.5},\n",
@@ -3947,28 +3983,130 @@ fn write_reference_match_report(
             "}}\n"
         ),
         json_escape(&input.display().to_string()),
-        reference_energy.len(),
-        events.len(),
-        overall,
-        lead_match,
-        bass_match,
-        drum_match,
-        energy_match,
-        reference_drums,
-        runtime_drums,
-        drum_density_ratio,
-        reference_sections
+        json_escape(selected_variant),
+        metrics.frames_compared,
+        metrics.runtime_events,
+        metrics.overall_match,
+        metrics.lead_contour_match,
+        metrics.bass_contour_match,
+        metrics.drum_transient_match,
+        metrics.section_energy_match,
+        metrics.reference_drum_frames,
+        metrics.runtime_drum_frames,
+        metrics.drum_density_ratio,
+        metrics
+            .reference_energy_sections
             .iter()
             .map(|value| format!("{value:.5}"))
             .collect::<Vec<_>>()
             .join(", "),
-        runtime_sections
+        metrics
+            .runtime_energy_sections
             .iter()
             .map(|value| format!("{value:.5}"))
             .collect::<Vec<_>>()
             .join(", ")
     );
     std::fs::write(path, text)
+}
+
+fn shift_ym_pitch(fnum: u16, block: u8, semitones: i32) -> (u16, u8) {
+    let hz = hz_from_ym2612_pitch(fnum, block);
+    if hz <= 0.0 {
+        return (fnum, block);
+    }
+    let shifted = hz * 2.0f32.powf(semitones as f32 / 12.0);
+    ym2612_pitch(shifted)
+}
+
+fn build_runtime_variant(events: &[RuntimeEvent], variant: &str) -> Vec<RuntimeEvent> {
+    let mut out = events.to_vec();
+    for event in &mut out {
+        match variant {
+            "lead_octave_down" if event.fm1_level > 0 => {
+                let (fnum, block) = shift_ym_pitch(event.fm1_fnum, event.fm1_block, -12);
+                event.fm1_fnum = fnum;
+                event.fm1_block = block;
+            }
+            "lead_octave_up" if event.fm1_level > 0 => {
+                let (fnum, block) = shift_ym_pitch(event.fm1_fnum, event.fm1_block, 12);
+                event.fm1_fnum = fnum;
+                event.fm1_block = block;
+            }
+            "bass_octave_up" if event.fm0_level > 0 => {
+                let (fnum, block) = shift_ym_pitch(event.fm0_fnum, event.fm0_block, 12);
+                event.fm0_fnum = fnum;
+                event.fm0_block = block;
+            }
+            "bass_octave_down" if event.fm0_level > 0 => {
+                let (fnum, block) = shift_ym_pitch(event.fm0_fnum, event.fm0_block, -12);
+                event.fm0_fnum = fnum;
+                event.fm0_block = block;
+            }
+            "counter_as_lead" if event.fm4_level > event.fm1_level / 2 && event.fm4_fnum > 0 => {
+                event.fm1_fnum = event.fm4_fnum;
+                event.fm1_block = event.fm4_block;
+                event.fm1_level = event.fm1_level.max(event.fm4_level).min(15);
+            }
+            "pad_as_lead" if event.fm2_level > event.fm1_level / 2 && event.fm2_fnum > 0 => {
+                event.fm1_fnum = event.fm2_fnum;
+                event.fm1_block = event.fm2_block;
+                event.fm1_level = event.fm1_level.max(event.fm2_level).min(15);
+            }
+            "leaner_drums" => {
+                event.dac_level = ((event.dac_level as f32) * 0.72).round() as u8;
+                event.psg_noise_level = ((event.psg_noise_level as f32) * 0.70).round() as u8;
+            }
+            "denser_drums" => {
+                event.dac_level = ((event.dac_level as f32) * 1.18).round().min(15.0) as u8;
+                event.psg_noise_level =
+                    ((event.psg_noise_level as f32) * 1.12).round().min(15.0) as u8;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn autotune_runtime_events(
+    frames: &[AnalysisFrame],
+    sample_rate: u32,
+    events: Vec<RuntimeEvent>,
+) -> (Vec<RuntimeEvent>, &'static str, ReferenceMatchMetrics) {
+    let variants = [
+        "base",
+        "lead_octave_down",
+        "lead_octave_up",
+        "bass_octave_up",
+        "bass_octave_down",
+        "counter_as_lead",
+        "pad_as_lead",
+        "leaner_drums",
+        "denser_drums",
+    ];
+    let mut best_name = "base";
+    let mut best_events = events.clone();
+    let mut best_metrics = compute_reference_match(frames, sample_rate, &events);
+
+    for variant in variants.iter().skip(1) {
+        let candidate = build_runtime_variant(&events, variant);
+        let metrics = compute_reference_match(frames, sample_rate, &candidate);
+        let score = metrics.overall_match
+            + metrics.lead_contour_match * 0.35
+            + metrics.bass_contour_match * 0.20
+            - (metrics.drum_density_ratio - 1.35).abs() * 0.025;
+        let best_score = best_metrics.overall_match
+            + best_metrics.lead_contour_match * 0.35
+            + best_metrics.bass_contour_match * 0.20
+            - (best_metrics.drum_density_ratio - 1.35).abs() * 0.025;
+        if score > best_score {
+            best_name = variant;
+            best_events = candidate;
+            best_metrics = metrics;
+        }
+    }
+
+    (best_events, best_name, best_metrics)
 }
 
 fn write_analysis_json(
@@ -5364,6 +5502,8 @@ fn analyse_input(
     } else {
         build_render_plan_runtime_events(&frames, imported.wav.sample_rate, &dac_chunks)
     };
+    let (runtime_events, selected_variant, reference_metrics) =
+        autotune_runtime_events(&frames, imported.wav.sample_rate, runtime_events);
     let import_metadata = bundle_dir.join("import.json");
     let note_arrangement = bundle_dir.join("note_arrangement.vand-audio.json");
     let render_plan = bundle_dir.join("render_plan.vand-audio.json");
@@ -5374,9 +5514,8 @@ fn analyse_input(
     write_reference_match_report(
         &reference_match_report,
         input,
-        &frames,
-        imported.wav.sample_rate,
-        &runtime_events,
+        selected_variant,
+        &reference_metrics,
     )?;
     write_import_metadata(&import_metadata, input, &imported)?;
     write_analysis_json(&out, input, &imported.wav, &frames)?;
