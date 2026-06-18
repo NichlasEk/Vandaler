@@ -2492,25 +2492,25 @@ fn section_gain(role: &str, bar_index: usize) -> f32 {
             if section_bar < 4 {
                 0.0
             } else if section_bar < 8 {
-                0.45
+                0.18
             } else {
-                0.92
+                0.42
             }
         }
         "psg_counter" => {
             if section_bar < 8 {
                 0.0
             } else if section_bar < 12 {
-                0.52
+                0.18
             } else {
-                0.85
+                0.32
             }
         }
         "psg_bass" => {
             if section_bar < 4 {
                 0.0
             } else {
-                0.78
+                0.44
             }
         }
         _ => 1.0,
@@ -2946,66 +2946,46 @@ struct AiMelodyTuning {
     hook_octave_shift: i32,
 }
 
-const AI_MELODY_TUNINGS: [AiMelodyTuning; 6] = [
+const AI_MELODY_TUNINGS: [AiMelodyTuning; 4] = [
     AiMelodyTuning {
         name: "balanced",
-        window_beats: 0.18,
+        window_beats: 0.24,
         lead_min_midi: 55,
-        lead_max_midi: 88,
-        lead_velocity_scale: 1.25,
+        lead_max_midi: 84,
+        lead_velocity_scale: 1.18,
         phrase_repeat_bars: 2,
         phrase_octave_shift: 0,
         hook_octave_shift: 12,
     },
     AiMelodyTuning {
         name: "lower_theme",
-        window_beats: 0.20,
+        window_beats: 0.28,
         lead_min_midi: 48,
         lead_max_midi: 76,
-        lead_velocity_scale: 1.34,
-        phrase_repeat_bars: 2,
+        lead_velocity_scale: 1.22,
+        phrase_repeat_bars: 4,
         phrase_octave_shift: -12,
         hook_octave_shift: 0,
     },
     AiMelodyTuning {
         name: "upper_theme",
-        window_beats: 0.16,
+        window_beats: 0.24,
         lead_min_midi: 62,
         lead_max_midi: 92,
-        lead_velocity_scale: 1.20,
+        lead_velocity_scale: 1.12,
         phrase_repeat_bars: 2,
         phrase_octave_shift: 0,
         hook_octave_shift: 12,
     },
     AiMelodyTuning {
-        name: "dense_phrase",
-        window_beats: 0.12,
-        lead_min_midi: 52,
-        lead_max_midi: 86,
-        lead_velocity_scale: 1.18,
-        phrase_repeat_bars: 1,
-        phrase_octave_shift: 0,
-        hook_octave_shift: 12,
-    },
-    AiMelodyTuning {
         name: "wide_phrase",
-        window_beats: 0.24,
+        window_beats: 0.32,
         lead_min_midi: 45,
-        lead_max_midi: 84,
-        lead_velocity_scale: 1.38,
+        lead_max_midi: 80,
+        lead_velocity_scale: 1.20,
         phrase_repeat_bars: 4,
         phrase_octave_shift: 0,
         hook_octave_shift: 12,
-    },
-    AiMelodyTuning {
-        name: "mid_hook",
-        window_beats: 0.18,
-        lead_min_midi: 50,
-        lead_max_midi: 80,
-        lead_velocity_scale: 1.42,
-        phrase_repeat_bars: 1,
-        phrase_octave_shift: 0,
-        hook_octave_shift: 7,
     },
 ];
 
@@ -3251,6 +3231,7 @@ fn build_runtime_events_with_optional_ai(
             + metrics.lead_contour_match * 0.70
             + metrics.bass_contour_match * 0.15
             - (metrics.drum_density_ratio - 1.50).abs() * 0.015
+            - bleep_penalty(&events)
             + tie_bias;
         if score > best_score {
             best_score = score;
@@ -4185,6 +4166,19 @@ fn build_runtime_variant(events: &[RuntimeEvent], variant: &str) -> Vec<RuntimeE
     out
 }
 
+fn psg_active_events(events: &[RuntimeEvent]) -> usize {
+    events
+        .iter()
+        .filter(|event| event.psg0_level > 0 || event.psg1_level > 0 || event.psg2_level > 0)
+        .count()
+}
+
+fn bleep_penalty(events: &[RuntimeEvent]) -> f32 {
+    let event_density = events.len() as f32 / 675.0;
+    let psg_density = psg_active_events(events) as f32 / 120.0;
+    (event_density - 1.0).max(0.0) * 0.030 + (psg_density - 1.0).max(0.0) * 0.055
+}
+
 fn autotune_runtime_events(
     frames: &[AnalysisFrame],
     sample_rate: u32,
@@ -4211,11 +4205,13 @@ fn autotune_runtime_events(
         let score = metrics.overall_match
             + metrics.lead_contour_match * 0.35
             + metrics.bass_contour_match * 0.20
-            - (metrics.drum_density_ratio - 1.35).abs() * 0.025;
+            - (metrics.drum_density_ratio - 1.35).abs() * 0.025
+            - bleep_penalty(&candidate);
         let best_score = best_metrics.overall_match
             + best_metrics.lead_contour_match * 0.35
             + best_metrics.bass_contour_match * 0.20
-            - (best_metrics.drum_density_ratio - 1.35).abs() * 0.025;
+            - (best_metrics.drum_density_ratio - 1.35).abs() * 0.025
+            - bleep_penalty(&best_events);
         if score > best_score {
             best_name = variant;
             best_events = candidate;
@@ -4911,7 +4907,7 @@ fn build_hook_notes(frames: &[AnalysisFrame], context: &MusicalContext) -> Vec<N
 fn build_psg_lead_notes(lead_notes: &[NoteEvent]) -> Vec<NoteEvent> {
     let mut out = Vec::new();
     for lead in lead_notes {
-        if lead.frames < 17 || lead.velocity < 0.08 {
+        if lead.frames < 28 || lead.velocity < 0.16 {
             continue;
         }
         out.push(NoteEvent {
@@ -4920,7 +4916,7 @@ fn build_psg_lead_notes(lead_notes: &[NoteEvent]) -> Vec<NoteEvent> {
             frames: lead.frames,
             midi: lead.midi,
             hz: lead.hz,
-            velocity: (lead.velocity * 0.34).clamp(0.07, 0.32),
+            velocity: (lead.velocity * 0.20).clamp(0.04, 0.18),
             instrument_id: "psg_square",
         });
     }
@@ -4930,7 +4926,7 @@ fn build_psg_lead_notes(lead_notes: &[NoteEvent]) -> Vec<NoteEvent> {
 fn build_psg_counter_notes(counter_notes: &[NoteEvent]) -> Vec<NoteEvent> {
     let mut out = Vec::new();
     for (index, counter) in counter_notes.iter().enumerate() {
-        if counter.frames < 5 || counter.velocity < 0.08 || index % 2 == 1 {
+        if counter.frames < 10 || counter.velocity < 0.12 || index % 3 != 0 {
             continue;
         }
         let midi = fold_midi_to_range(counter.midi + 12, 60, 88);
@@ -4940,7 +4936,7 @@ fn build_psg_counter_notes(counter_notes: &[NoteEvent]) -> Vec<NoteEvent> {
             frames: counter.frames,
             midi,
             hz: midi_to_hz(midi),
-            velocity: (counter.velocity * 0.30).clamp(0.05, 0.24),
+            velocity: (counter.velocity * 0.18).clamp(0.04, 0.16),
             instrument_id: "psg_square",
         });
     }
@@ -4960,7 +4956,7 @@ fn build_psg_bass_notes(bass_notes: &[NoteEvent]) -> Vec<NoteEvent> {
             frames: bass.frames,
             midi,
             hz: midi_to_hz(midi),
-            velocity: (bass.velocity * 0.28).clamp(0.05, 0.26),
+            velocity: (bass.velocity * 0.16).clamp(0.04, 0.14),
             instrument_id: "psg_square",
         });
     }
